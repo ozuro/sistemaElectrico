@@ -685,7 +685,7 @@
       const params = new URLSearchParams({
         f: 'json',
         where: `SUM_COD_SED='${id}'`,
-        outFields: 'SUM_COD_SUM,SUM_NOM_SUM,SUM_DIR_SUM,SUM_MAX_DEM,SUM_VNR_EST, SUM_FEC_CREA',
+        outFields: 'SUM_COD_SUM,SUM_NOM_SUM,SUM_DIR_SUM,SUM_CLI_FISE,SUM_MAX_DEM,SUM_VNR_EST, SUM_FEC_CREA,SUM_FAC_PER,SUM_POT_EQT,SUM_TAR_SUM,SUM_FAC_MNT,SUM_CLI_MAY,SUM_COD_SUM_COM,SUM_CON_ENG,SUM_EST_SUM,SUM_TEN_SUM,SUM_MAX_DEM,SUM_FEC_PTA_SRV,SUM_TIP_SRV,SUM_MED_FAS,SUM_COD_SED',
         returnGeometry: true,
         outSR: 4326,
         resultRecordCount: 1000
@@ -712,6 +712,21 @@
         <br><b>Código:</b> ${a.SUM_COD_SUM}
         <br><b>VNR Estado:</b> ${a.SUM_VNR_EST || 'N/A'}
         <br><b>Fecha Creación:</b> ${a.SUM_FEC_CREA ? new Date(a.SUM_FEC_CREA).toLocaleDateString() : 'N/A'}
+        <br><b>Fac. Per:</b> ${a.SUM_FAC_PER || 'N/A'}
+        <br><b>Potencia. Equivalente:</b> ${a.SUM_POT_EQT || 'N/A'} 
+        <br><b>Tarifa:</b> ${a.SUM_TAR_SUM || 'N/A'}
+        <br><b>Monto Facturado:</b> ${a.SUM_FAC_MNT || 'N/A'}
+        <br><b>FISE:</b> ${a.SUM_CLI_FISE ? 'Sí' : 'No'}
+        <br><b>Cliente Mayorista:</b> ${a.SUM_CLI_MAY ? 'Sí' : 'No'}
+        <br><b>Código Comercial:</b> ${a.SUM_COD_SUM_COM || 'N/A'}
+        <br><b>Consumo Energía:</b> ${a.SUM_CON_ENG || 'N/A'}
+        <br><b>Estado Suministro:</b> ${a.SUM_EST_SUM || 'N/A'}
+        <br><b>Tensión Suministro:</b> ${a.SUM_TEN_SUM || 'N/A'}
+        <br><b>Máx. Demanda:</b> ${a.SUM_MAX_DEM || 'N/A'}
+        <br><b>Fecha Puesta en Servicio:</b> ${a.SUM_FEC_PTA_SRV ? new Date(a.SUM_FEC_PTA_SRV).toLocaleDateString() : 'N/A'}
+        <br><b>Tipo Servicio:</b> ${a.SUM_TIP_SRV || 'N/A'}
+        <br><b>NRO de Fases:</b> ${a.SUM_MED_FAS || 'N/A'}
+        <br><b>Código SED:</b> ${a.SUM_COD_SED || 'N/A'}
         `)
         .addTo(capaSuministros);
 

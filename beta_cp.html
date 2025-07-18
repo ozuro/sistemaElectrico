@@ -1,0 +1,2043 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Sistema Integral de Red Eléctrica - Electro Puno</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://threejs.org/build/three.min.js"></script>
+  <script src="https://threejs.org/examples/js/controls/OrbitControls.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    header {
+      background: linear-gradient(135deg, #003366 0%, #0066cc 100%);
+      color: white;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    
+    header h2 {
+      margin: 0;
+      font-size: 24px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+    
+    header h3 {
+      margin: 10px 0 0 0;
+      font-size: 16px;
+      font-weight: normal;
+      opacity: 0.9;
+    }
+    
+    #map {
+      height: calc(100% - 180px);
+      border-radius: 0 0 15px 15px;
+      overflow: hidden;
+    }
+    
+    #panel {
+      padding: 15px;
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+      border-radius: 15px 15px 0 0;
+      margin-top: 10px;
+    }
+    
+    input, button, select {
+      padding: 10px 15px;
+      font-size: 14px;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+    }
+    
+    input:focus, select:focus {
+      outline: none;
+      border-color: #003366;
+      box-shadow: 0 0 0 3px rgba(0,51,102,0.1);
+    }
+    
+    button {
+      background: linear-gradient(135deg, #003366 0%, #0066cc 100%);
+      color: white;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      transition: all 0.3s ease;
+    }
+    
+    button:hover {
+      background: linear-gradient(135deg, #0066cc 0%, #0099ff 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0,51,102,0.3);
+    }
+    
+    button:active {
+      transform: translateY(0);
+    }
+    
+    .btn-danger {
+      background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+    }
+    
+    .btn-danger:hover {
+      background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
+    }
+    
+    .btn-success {
+      background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    }
+    
+    .btn-success:hover {
+      background: linear-gradient(135deg, #20c997 0%, #17a2b8 100%);
+    }
+    
+    .btn-warning {
+      background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);
+      color: #212529;
+    }
+    
+    .btn-warning:hover {
+      background: linear-gradient(135deg, #fd7e14 0%, #dc3545 100%);
+      color: white;
+    }
+    
+    .btn-bt {
+      background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+    }
+    
+    .btn-bt:hover {
+      background: linear-gradient(135deg, #0056b3 0%, #004085 100%);
+    }
+    
+    #info {
+      margin-left: auto;
+      font-weight: bold;
+      background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+      color: white;
+      padding: 10px 15px;
+      border-radius: 20px;
+      box-shadow: 0 2px 10px rgba(40,167,69,0.3);
+    }
+    
+    #view3D {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1000;
+      display: none;
+      background: linear-gradient(135deg, #87CEEB 0%, #98D8E8 100%);
+    }
+    
+    #view3DControls {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 1001;
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 20px;
+      border-radius: 15px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    }
+    
+    #streetViewPanel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 20px;
+      border-radius: 15px;
+      z-index: 1001;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    }
+    
+    .street-view-active {
+      cursor: crosshair !important;
+    }
+    
+    .street-view-marker {
+      background: #ff4444;
+      border: 2px solid white;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    }
+    
+    .transformer-icon {
+      background: radial-gradient(circle, #ffeb3b, #ff9800);
+      border: 3px solid #333;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+      animation: pulse 2s infinite;
+    }
+    
+    .transformer-icon:hover {
+      transform: scale(1.3);
+      box-shadow: 0 6px 25px rgba(0,0,0,0.5);
+    }
+    
+    @keyframes pulse {
+      0% { box-shadow: 0 4px 15px rgba(255,235,59,0.3); }
+      50% { box-shadow: 0 4px 25px rgba(255,152,0,0.6); }
+      100% { box-shadow: 0 4px 15px rgba(255,235,59,0.3); }
+    }
+    
+    .leaflet-popup-content {
+      max-width: 400px !important;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    
+    .popup-header {
+      background: linear-gradient(135deg, #003366 0%, #0066cc 100%);
+      color: white;
+      padding: 10px;
+      margin: -10px -10px 10px -10px;
+      border-radius: 5px 5px 0 0;
+      font-weight: bold;
+      text-align: center;
+    }
+    
+    .popup-section {
+      margin-bottom: 10px;
+      padding: 8px;
+      background: #f8f9fa;
+      border-radius: 5px;
+      border-left: 4px solid #0066cc;
+    }
+    
+    .popup-section h4 {
+      margin: 0 0 5px 0;
+      color: #003366;
+      font-size: 14px;
+    }
+    
+    .popup-section p {
+      margin: 2px 0;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    
+    .popup-section strong {
+      color: #495057;
+      font-weight: 600;
+    }
+    
+    .popup-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    
+    .popup-buttons button {
+      padding: 8px 12px;
+      font-size: 12px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: all 0.3s ease;
+    }
+    
+    .btn-popup-primary {
+      background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+      color: white;
+    }
+    
+    .btn-popup-secondary {
+      background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+      color: white;
+    }
+    
+    .btn-popup-info {
+      background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+      color: white;
+    }
+    
+    .btn-popup-bt {
+      background: linear-gradient(135deg, #6f42c1 0%, #5a2d91 100%);
+      color: white;
+    }
+    
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+    }
+    
+    .loading-spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #0066cc;
+      border-radius: 50%;
+      width: 60px;
+      height: 60px;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .checkbox-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    .checkbox-container input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: #003366;
+    }
+    
+    .network-stats {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(255,255,255,0.95);
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+      font-size: 12px;
+      max-width: 280px;
+      backdrop-filter: blur(5px);
+    }
+    
+    .network-stats h4 {
+      margin: 0 0 10px 0;
+      color: #003366;
+      font-size: 14px;
+      text-align: center;
+    }
+    
+    .stat-item {
+      display: flex;
+      justify-content: space-between;
+      margin: 5px 0;
+      padding: 3px 0;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .stat-label {
+      font-weight: 600;
+      color: #495057;
+    }
+    
+    .stat-value {
+      font-weight: bold;
+      color: #003366;
+    }
+
+    .notification {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(220, 53, 69, 0.95);
+      color: white;
+      padding: 15px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+      z-index: 3000;
+      display: none;
+      animation: slideIn 0.3s ease;
+    }
+
+    .notification.success {
+      background: rgba(40, 167, 69, 0.95);
+    }
+
+    .notification.info {
+      background: rgba(23, 162, 184, 0.95);
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
+
+    .loading-message {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 20px 30px;
+      border-radius: 10px;
+      z-index: 2001;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-overlay" id="loadingOverlay">
+    <div style="text-align: center; color: white;">
+      <div class="loading-spinner"></div>
+      <p style="margin-top: 20px; font-size: 18px;">Cargando datos de la red eléctrica...</p>
+    </div>
+  </div>
+
+  <div class="loading-message" id="loadingMessage">
+    <div style="text-align: center;">
+      <div class="loading-spinner" style="width: 30px; height: 30px; margin: 0 auto 10px;"></div>
+      <div id="loadingText">Cargando...</div>
+    </div>
+  </div>
+
+  <div class="notification" id="notification">
+    <span id="notificationText"></span>
+    <button onclick="hideNotification()" style="background: none; border: none; color: white; float: right; cursor: pointer;">×</button>
+  </div>
+
+  <header>
+    <h2><i class="fas fa-bolt"></i> CONSORCIO C&G - SISTEMA INTEGRAL DE RED ELÉCTRICA</h2>
+    <h3>"REMODELACIÓN Y AMPLIACIÓN DE REDES DE DISTRIBUCIÓN PRIMARIA Y SECUNDARIA ZONA DE LOS DISTRITOS DE HUATA-COATA-CAPACHICA, PROVINCIA DE PUNO, DEPARTAMENTO DE PUNO"</h3>
+  </header>
+
+  <div id="panel">
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <i class="fas fa-map-pin" style="color: #003366; font-size: 18px;"></i>
+      <input type="text" id="inputUbigeo" placeholder="Ubigeos (ej: 210101,210102)...">
+    </div>
+    
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <i class="fas fa-search" style="color: #003366; font-size: 18px;"></i>
+      <input type="text" id="inputID" placeholder="ID del Transformador...">
+      <input type="number" id="inputRadio" placeholder="Radio (m)" value="300" min="50" max="2000">
+    </div>
+
+    <select id="selectCapas" onchange="toggleCapasEspeciales()">
+      <option value="">Seleccionar Capa Especial</option>
+      <option value="mt_lines">Líneas Media Tensión</option>
+      <option value="mt_structures">Estructuras MT</option>
+      <option value="all_network">Red Completa</option>
+    </select>
+
+    <button onclick="cargarTransformadores()" title="Cargar transformadores por ubigeo">
+      <i class="fas fa-bolt"></i> Transformadores
+    </button>
+    
+    <button onclick="buscarID()" title="Buscar transformador específico">
+      <i class="fas fa-search"></i> Buscar ID
+    </button>
+    
+    <button onclick="descargarCSV()" class="btn-success" title="Descargar datos CSV">
+      <i class="fas fa-download"></i> CSV
+    </button>
+    
+    <input type="file" id="inputArchivo" accept=".csv" onchange="cargarDesdeExcel()" title="Cargar archivo CSV">
+    
+    <div class="checkbox-container">
+      <input type="checkbox" id="toggleCirculos" onchange="toggleCirculos()">
+      <label for="toggleCirculos"><i class="fas fa-circle"></i> Círculos</label>
+    </div>
+    
+    <button onclick="toggle3DView()" class="btn-warning" title="Vista 3D interactiva">
+      <i class="fas fa-cube"></i> 3D
+    </button>
+    
+    <button onclick="activarStreetView()" title="Modo Street View">
+      <i class="fas fa-street-view"></i> Street View
+    </button>
+    
+    <button onclick="limpiarTodo()" class="btn-danger" title="Limpiar todas las capas">
+      <i class="fas fa-eraser"></i> Limpiar
+    </button>
+
+    <span id="info"><i class="fas fa-info-circle"></i> 0 elementos</span>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Estadísticas de Red -->
+  <div class="network-stats" id="networkStats" style="display: none;">
+    <h4><i class="fas fa-chart-bar"></i> Estadísticas de Red</h4>
+    <div class="stat-item">
+      <span class="stat-label">⚡ Transformadores:</span>
+      <span class="stat-value" id="countTransformers">0</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">🏠 Suministros:</span>
+      <span class="stat-value" id="countSupplies">0</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">🏗️ Postes MT:</span>
+      <span class="stat-value" id="countMTPoles">0</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">💡 Postes BT:</span>
+      <span class="stat-value" id="countBTPoles">0</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">🔌 Circuitos BT:</span>
+      <span class="stat-value" id="countBTCircuits">0</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">⚡ Líneas MT:</span>
+      <span class="stat-value" id="countMTLines">0</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">🔵 Líneas BT:</span>
+      <span class="stat-value" id="countBTLines">0</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">🏠 Proyectados:</span>
+      <span class="stat-value" id="countProjected">0</span>
+    </div>
+  </div>
+
+  <!-- Vista 3D -->
+  <div id="view3D">
+    <div id="view3DControls">
+      <button onclick="cerrar3DView()" style="margin-bottom: 15px; background: #dc3545;">
+        <i class="fas fa-arrow-left"></i> Volver al Mapa
+      </button>
+      <div style="margin-bottom: 10px;"><i class="fas fa-mouse"></i> Arrastra para rotar</div>
+      <div style="margin-bottom: 10px;"><i class="fas fa-scroll"></i> Scroll para zoom</div>
+      <hr style="margin: 15px 0; border-color: #555;">
+      <div><i class="fas fa-bolt"></i> Transformadores: <span id="countTransformers3D">0</span></div>
+      <div><i class="fas fa-home"></i> Postes/Suministros: <span id="countPoles3D">0</span></div>
+      <div><i class="fas fa-plus"></i> Proyectados: <span id="countExcel3D">0</span></div>
+    </div>
+  </div>
+
+  <!-- Panel Street View -->
+  <div id="streetViewPanel" style="display: none;">
+    <div style="margin-bottom: 10px;"><i class="fas fa-street-view"></i> <strong>Modo Street View Activo</strong></div>
+    <div style="margin-bottom: 15px;">Haz clic en el mapa para ver la ubicación</div>
+    <button onclick="desactivarStreetView()" style="background: #dc3545;">
+      <i class="fas fa-times"></i> Desactivar
+    </button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script>
+    // Inicialización del mapa
+    const map = L.map('map').setView([-15.55, -69.97], 13);
+
+    // Variables globales para 3D y Street View
+    let scene, camera, renderer, controls;
+    let transformadores3D = [];
+    let postes3D = [];
+    let casas3D = [];
+    let streetViewActive = false;
+    let streetViewMarkers = [];
+
+    // Capas base mejoradas
+    const capaBase = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const capaGoogle = L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+      maxZoom: 20,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+      attribution: '© Google Earth'
+    });
+
+    const capaGoogleHybrid = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+      maxZoom: 20,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+      attribution: '© Google Hybrid'
+    });
+
+    // Capas de datos
+    let capaTrafo = L.layerGroup().addTo(map);
+    let capaSuministros = L.layerGroup().addTo(map);
+    let capaExcel = L.layerGroup().addTo(map);
+    let capaCirculos = L.layerGroup().addTo(map);
+    let capaStreetView = L.layerGroup().addTo(map);
+    
+    // Nuevas capas para MT y BT
+    let capaLineasMT = L.layerGroup().addTo(map);
+    let capaEstructurasMT = L.layerGroup().addTo(map);
+    let capaCircuitosBT = L.layerGroup().addTo(map);
+    let capaPostesBT = L.layerGroup().addTo(map);
+    let capaLineasBT = L.layerGroup().addTo(map); // Nueva capa para líneas BT
+    
+    let suministrosFiltrados = [];
+    let transformadorSeleccionado = null;
+
+    // Control de capas mejorado
+    const capasBase = { 
+      "🗺️ Mapa Calles": capaBase, 
+      "🛰️ Google Earth": capaGoogle,
+      "🌐 Google Hybrid": capaGoogleHybrid
+    };
+    
+    const capasSuperpuestas = {
+      "⚡ Transformadores": capaTrafo,
+      "🏠 Suministros": capaSuministros,
+      "⚡ Líneas MT": capaLineasMT,
+      "🏗️ Estructuras MT": capaEstructurasMT,
+      "💡 Postes BT": capaPostesBT,
+      "🔌 Circuitos BT": capaCircuitosBT,
+      "🔵 Líneas BT": capaLineasBT,
+      "🏠 Proyectados": capaExcel,
+      "🔵 Círculos de Cobertura": capaCirculos
+    };
+    
+    L.control.layers(capasBase, capasSuperpuestas, { 
+      collapsed: false,
+      position: 'topright'
+    }).addTo(map);
+
+    // Funciones de notificación
+    function showNotification(message, type = 'info', duration = 4000) {
+      const notification = document.getElementById('notification');
+      const notificationText = document.getElementById('notificationText');
+      
+      notification.className = `notification ${type}`;
+      notificationText.textContent = message;
+      notification.style.display = 'block';
+      
+      if (duration > 0) {
+        setTimeout(() => {
+          hideNotification();
+        }, duration);
+      }
+    }
+
+    function hideNotification() {
+      document.getElementById('notification').style.display = 'none';
+    }
+
+    function showLoadingMessage(message) {
+      const loadingMessage = document.getElementById('loadingMessage');
+      const loadingText = document.getElementById('loadingText');
+      loadingText.textContent = message;
+      loadingMessage.style.display = 'block';
+    }
+
+    function hideLoadingMessage() {
+      document.getElementById('loadingMessage').style.display = 'none';
+    }
+
+    // Función para mostrar loading
+    function mostrarLoading(mostrar = true) {
+      document.getElementById('loadingOverlay').style.display = mostrar ? 'flex' : 'none';
+    }
+
+    // Función para actualizar estadísticas
+    function actualizarEstadisticas() {
+      document.getElementById('countTransformers').textContent = capaTrafo.getLayers().length;
+      document.getElementById('countSupplies').textContent = capaSuministros.getLayers().length;
+      document.getElementById('countMTPoles').textContent = capaEstructurasMT.getLayers().length;
+      document.getElementById('countBTPoles').textContent = capaPostesBT.getLayers().length;
+      document.getElementById('countBTCircuits').textContent = capaCircuitosBT.getLayers().length;
+      document.getElementById('countMTLines').textContent = capaLineasMT.getLayers().length;
+      document.getElementById('countBTLines').textContent = capaLineasBT.getLayers().length;
+      document.getElementById('countProjected').textContent = capaExcel.getLayers().length;
+      
+      const total = capaTrafo.getLayers().length + capaSuministros.getLayers().length + 
+                   capaEstructurasMT.getLayers().length + capaPostesBT.getLayers().length +
+                   capaCircuitosBT.getLayers().length + capaLineasMT.getLayers().length + 
+                   capaLineasBT.getLayers().length + capaExcel.getLayers().length;
+      
+      document.getElementById('info').innerHTML = `<i class="fas fa-info-circle"></i> ${total} elementos cargados`;
+      
+      if (total > 0) {
+        document.getElementById('networkStats').style.display = 'block';
+      } else {
+        document.getElementById('networkStats').style.display = 'none';
+      }
+    }
+
+    // NUEVA FUNCIÓN: Cargar líneas/tramos de Baja Tensión
+    async function cargarLineasBT(codigoSED) {
+      if (!codigoSED) {
+        showNotification('Código SED no válido para cargar líneas BT', 'error');
+        return;
+      }
+
+      showLoadingMessage('Cargando líneas de BT...');
+      
+      try {
+        // Usar la capa 26 - Tramo Baja Tensión con filtro por TBT_COD_SED
+        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/26/query';
+        const params = new URLSearchParams({
+          f: 'json',
+          where: `TBT_COD_SED = '${codigoSED}'`,
+          outFields: '*',
+          returnGeometry: true,
+          outSR: 4326,
+          resultRecordCount: 1000
+        });
+
+        const res = await fetch(`${url}?${params}`);
+        
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(data.error.message || 'Error en la consulta de líneas BT');
+        }
+
+        capaLineasBT.clearLayers();
+
+        if (!data.features || data.features.length === 0) {
+          showNotification(`No se encontraron líneas BT para el transformador ${codigoSED}`, 'info');
+          return;
+        }
+
+        data.features.forEach(feature => {
+          const attrs = feature.attributes;
+          const geom = feature.geometry;
+
+          if (geom && geom.paths) {
+            const popupContent = `
+              <div class="popup-header">
+                <i class="fas fa-plug"></i> Línea Baja Tensión
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-info-circle"></i> Información General</h4>
+                <p><strong>Código Tramo:</strong> ${attrs.TBT_COD_TBT || 'N/A'}</p>
+                <p><strong>Código SED:</strong> ${attrs.TBT_COD_SED || 'N/A'}</p>
+                <p><strong>Tipo Red:</strong> ${getTipoRed(attrs.TBT_COD_TIP_RED)}</p>
+                <p><strong>Material Conductor:</strong> ${getMaterialConductor(attrs.TBT_COD_MAT_COND)}</p>
+                <p><strong>Tipo Circuito:</strong> ${getTipoCircuito(attrs.TBT_COD_TIP_CIR)}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-ruler"></i> Características Físicas</h4>
+                <p><strong>Longitud Real:</strong> ${attrs.TBT_LNG_REAL || 'N/A'} m</p>
+                <p><strong>Longitud Lineal:</strong> ${attrs.TBT_LNG_LINEAL || 'N/A'} m</p>
+                <p><strong>Nro Conductores:</strong> ${attrs.TBT_NRO_COND || 'N/A'}</p>
+                <p><strong>Sección Conductor:</strong> ${attrs.TBT_SEC_COND || 'N/A'} mm²</p>
+                <p><strong>Clase Conductor:</strong> ${attrs.TBT_CLS_COND || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-bolt"></i> Características Eléctricas</h4>
+                <p><strong>Tensión Nominal:</strong> ${attrs.TBT_VAL_TEN_NOM || 'N/A'} V</p>
+                <p><strong>Corriente Máxima:</strong> ${attrs.TBT_COR_MAX || 'N/A'} A</p>
+                <p><strong>Fases:</strong> ${attrs.TBT_COD_FAS || 'N/A'}</p>
+                <p><strong>Código Técnico:</strong> ${attrs.TBT_COD_TEC_FAS || 'N/A'}</p>
+                <p><strong>Tipo Fabricación:</strong> ${attrs.TBT_TIP_FAB || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-map-marker-alt"></i> Ubicación</h4>
+                <p><strong>Ubigeo:</strong> ${attrs.TBT_COD_UBI || 'N/A'}</p>
+                <p><strong>Localidad:</strong> ${attrs.TBT_COD_LOC || 'N/A'}</p>
+                <p><strong>Propietario:</strong> ${getPropietario(attrs.TBT_COD_PROP)}</p>
+                <p><strong>Sistema Eléctrico:</strong> ${attrs.TBT_COD_SIE || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-cog"></i> Estado y Control</h4>
+                <p><strong>Estado Conservación:</strong> ${getEstadoConservacion(attrs.TBT_EST_CON)}</p>
+                <p><strong>Estado VNR:</strong> ${attrs.TBT_VNR_EST || 'N/A'}</p>
+                <p><strong>Informado Osinergmin:</strong> ${attrs.TBT_INF_OSI === 'S' ? 'Sí' : 'No'}</p>
+                <p><strong>Habilitado:</strong> ${attrs.Enabled === 1 ? 'Sí' : 'No'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-calendar"></i> Fechas</h4>
+                <p><strong>Puesta Servicio:</strong> ${attrs.TBT_FEC_PTA_SRV ? new Date(attrs.TBT_FEC_PTA_SRV).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Fecha Retiro:</strong> ${attrs.TBT_FEC_RET ? new Date(attrs.TBT_FEC_RET).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Creación:</strong> ${attrs.TBT_FEC_CREA ? new Date(attrs.TBT_FEC_CREA).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Actualización:</strong> ${attrs.TBT_FEC_ACT ? new Date(attrs.TBT_FEC_ACT).toLocaleDateString() : 'N/A'}</p>
+              </div>
+            `;
+
+            // Estilo de línea BT en color azul
+            let lineStyle = {
+              weight: 4,
+              opacity: 0.8,
+              color: '#007bff' // Azul por defecto para BT
+            };
+
+            // Variaciones según tipo de red
+            switch (attrs.TBT_COD_TIP_RED) {
+              case 'A': // Aéreo
+                lineStyle.color = '#0066cc';
+                lineStyle.dashArray = null;
+                break;
+              case 'S': // Subterráneo
+                lineStyle.color = '#004499';
+                lineStyle.dashArray = '8, 4';
+                break;
+              case 'C': // Subacuático
+                lineStyle.color = '#0080ff';
+                lineStyle.dashArray = null;
+                break;
+              default:
+                lineStyle.color = '#007bff';
+            }
+
+            // Variaciones según material del conductor
+            if (attrs.TBT_COD_MAT_COND === 'CU') {
+              lineStyle.color = '#1e90ff'; // Azul dodger para cobre
+            } else if (attrs.TBT_COD_MAT_COND === 'AL') {
+              lineStyle.color = '#4169e1'; // Azul real para aluminio
+            }
+
+            // Convertir coordenadas del polígono/línea
+            const coordinates = geom.paths[0].map(coord => [coord[1], coord[0]]);
+            
+            L.polyline(coordinates, lineStyle)
+              .bindPopup(popupContent, { maxWidth: 450 })
+              .bindTooltip(`🔵 Línea BT ${getMaterialConductor(attrs.TBT_COD_MAT_COND)} ${attrs.TBT_SEC_COND || ''}mm² (${getTipoRed(attrs.TBT_COD_TIP_RED)})`, {
+                permanent: false,
+                direction: 'center'
+              })
+              .addTo(capaLineasBT);
+          }
+        });
+
+        showNotification(`${data.features.length} líneas BT cargadas para el transformador ${codigoSED}`, 'success');
+        console.log(`Líneas BT cargadas: ${data.features.length}`);
+
+      } catch (error) {
+        console.error('Error al cargar líneas BT:', error);
+        showNotification(`Error al cargar líneas BT: ${error.message}`, 'error');
+      } finally {
+        hideLoadingMessage();
+        actualizarEstadisticas();
+      }
+    }
+
+    // Función para cargar postes de Baja Tensión (CORREGIDA - Capa 27)
+    async function cargarPostesBT(codigoSED) {
+      if (!codigoSED) {
+        showNotification('Código SED no válido para cargar postes BT', 'error');
+        return;
+      }
+
+      showLoadingMessage('Cargando postes de BT...');
+      
+      try {
+        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/27/query';
+        const params = new URLSearchParams({
+          f: 'json',
+          where: `NOD_COD_SED = '${codigoSED}'`,
+          outFields: '*',
+          returnGeometry: true,
+          outSR: 4326,
+          resultRecordCount: 1000
+        });
+
+        const res = await fetch(`${url}?${params}`);
+        
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(data.error.message || 'Error en la consulta de postes BT');
+        }
+
+        capaPostesBT.clearLayers();
+
+        if (!data.features || data.features.length === 0) {
+          showNotification(`No se encontraron postes BT para el transformador ${codigoSED}`, 'info');
+          return;
+        }
+
+        data.features.forEach(feature => {
+          const attrs = feature.attributes;
+          const geom = feature.geometry;
+
+          if (geom && geom.x && geom.y) {
+            const popupContent = `
+              <div class="popup-header">
+                <i class="fas fa-lightbulb"></i> Poste Baja Tensión
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-info-circle"></i> Información General</h4>
+                <p><strong>Código:</strong> ${attrs.NOD_COD_NOD || 'N/A'}</p>
+                <p><strong>SED:</strong> ${attrs.NOD_COD_SED || 'N/A'}</p>
+                <p><strong>Salida BT:</strong> ${attrs.NOD_COD_SAL || 'N/A'}</p>
+                <p><strong>Circuito BT:</strong> ${attrs.NOD_NOM_SAL || 'N/A'}</p>
+                <p><strong>Función:</strong> ${getFuncionEstructura(attrs.NOD_COD_FNC)}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-tools"></i> Características Físicas</h4>
+                <p><strong>Material:</strong> ${getMaterialSoporte(attrs.NOD_COD_MAT_SPT)}</p>
+                <p><strong>Altura:</strong> ${attrs.NOD_ALT_SPT || 'N/A'} m</p>
+                <p><strong>Tipo Soporte:</strong> ${getTipoSoporte(attrs.NOD_COD_TIP_SPT)}</p>
+                <p><strong>Clase:</strong> ${attrs.NOD_CLS_SPT || 'N/A'}</p>
+                <p><strong>Esfuerzo:</strong> ${attrs.NOD_ESF_SPT || 'N/A'}</p>
+                <p><strong>Cant. Postes:</strong> ${attrs.NOD_CNT_SPT || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-cogs"></i> Armados</h4>
+                <p><strong>Armado 1:</strong> ${attrs.NOD_COD_TIP_ARM_01 || 'N/A'} (${attrs.NOD_CNT_TIP_ARM_01 || 0})</p>
+                <p><strong>Descripción 1:</strong> ${attrs.NOD_DSC_TIP_ARM_01 || 'N/A'}</p>
+                <p><strong>Armado 2:</strong> ${attrs.NOD_COD_TIP_ARM_02 || 'N/A'} (${attrs.NOD_CNT_TIP_ARM_02 || 0})</p>
+                <p><strong>Armado 3:</strong> ${attrs.NOD_COD_TIP_ARM_03 || 'N/A'} (${attrs.NOD_CNT_TIP_ARM_03 || 0})</p>
+                <p><strong>Armado 4:</strong> ${attrs.NOD_COD_TIP_ARM_04 || 'N/A'} (${attrs.NOD_CNT_TIP_ARM_04 || 0})</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-wrench"></i> Estado y Servicios</h4>
+                <p><strong>Conservación:</strong> ${getEstadoConservacion(attrs.NOD_EST_CONS)}</p>
+                <p><strong>Aterramiento:</strong> ${attrs.NOD_ATER === 'S' || attrs.NOD_FLG_ATER === 'S' ? 'Sí' : 'No'}</p>
+                <p><strong>Propietario:</strong> ${getPropietario(attrs.NOD_COD_PROP)}</p>
+                <p><strong>Telecomunicación:</strong> ${attrs.NOD_FLG_TELE === 'S' ? 'Sí' : 'No'}</p>
+                <p><strong>Etiqueta Campo:</strong> ${attrs.NOD_ETQ_CPO || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-calendar"></i> Fechas</h4>
+                <p><strong>Puesta Servicio:</strong> ${attrs.NOD_FEC_PTA_SRV ? new Date(attrs.NOD_FEC_PTA_SRV).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Creación:</strong> ${attrs.NOD_FEC_CREA ? new Date(attrs.NOD_FEC_CREA).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Actualización:</strong> ${attrs.NOD_FEC_ACT ? new Date(attrs.NOD_FEC_ACT).toLocaleDateString() : 'N/A'}</p>
+              </div>
+            `;
+
+            // Color según material del poste
+            let color = '#4169E1'; // Azul por defecto para BT
+            switch (attrs.NOD_COD_MAT_SPT) {
+              case 'CO': color = '#B2B2B2'; break; // Concreto - Gris
+              case 'FI': color = '#FFA77F'; break; // Fierro - Naranja claro
+              case 'FG': color = '#CD6666'; break; // Fierro Galvanizado - Rojo claro
+              case 'FN': color = '#730000'; break; // Fierro Negro - Rojo oscuro
+              case 'HO': color = '#98E600'; break; // Hormigón - Verde lima
+              case 'MA': color = '#8B4513'; break; // Madera - Marrón
+              case 'RI': color = '#734C00'; break; // Riel - Marrón oscuro
+              default: color = '#4169E1'; // Azul por defecto
+            }
+
+            L.circleMarker([geom.y, geom.x], {
+              radius: 7,
+              fillColor: color,
+              color: '#000000',
+              weight: 2,
+              opacity: 1,
+              fillOpacity: 0.8
+            })
+            .bindPopup(popupContent, { maxWidth: 450 })
+            .bindTooltip(`💡 Poste BT ${attrs.NOD_COD_NOD || attrs.NOD_NOM_SAL || ''}`, {
+              permanent: false,
+              direction: 'top'
+            })
+            .addTo(capaPostesBT);
+          }
+        });
+
+        showNotification(`${data.features.length} postes BT cargados para el transformador ${codigoSED}`, 'success');
+        console.log(`Postes BT cargados: ${data.features.length}`);
+
+      } catch (error) {
+        console.error('Error al cargar postes BT:', error);
+        showNotification(`Error al cargar postes BT: ${error.message}`, 'error');
+      } finally {
+        hideLoadingMessage();
+        actualizarEstadisticas();
+      }
+    }
+
+    // Función para cargar circuitos de Baja Tensión (CORREGIDA - Capa 25)
+    async function cargarCircuitosBT(codigoSED) {
+      if (!codigoSED) {
+        showNotification('Código SED no válido para cargar circuitos BT', 'error');
+        return;
+      }
+
+      showLoadingMessage('Cargando circuitos de BT...');
+      
+      try {
+        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/25/query';
+        const params = new URLSearchParams({
+          f: 'json',
+          where: `SAL_COD_SED = '${codigoSED}'`,
+          outFields: '*',
+          returnGeometry: true,
+          outSR: 4326,
+          resultRecordCount: 1000
+        });
+
+        const res = await fetch(`${url}?${params}`);
+        
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(data.error.message || 'Error en la consulta de circuitos BT');
+        }
+
+        capaCircuitosBT.clearLayers();
+
+        if (!data.features || data.features.length === 0) {
+          showNotification(`No se encontraron circuitos BT para el transformador ${codigoSED}`, 'info');
+          return;
+        }
+
+        data.features.forEach(feature => {
+          const attrs = feature.attributes;
+          const geom = feature.geometry;
+
+          if (geom && geom.x && geom.y) {
+            // Color según tipo de servicio
+            let color = '#007bff'; // Azul por defecto
+            let icon = '🔌';
+            
+            if (attrs.SAL_TIP_SRV === 'AP') {
+              color = '#FFFF00'; // Amarillo para Alumbrado Público
+              icon = '💡';
+            } else if (attrs.SAL_TIP_SRV === 'SP') {
+              color = '#BEE8FF'; // Azul claro para Servicio Particular
+              icon = '🔌';
+            } else if (attrs.SAL_TIP_SRV === 'SP+AP') {
+              color = '#90EE90'; // Verde claro para ambos
+              icon = '🔌💡';
+            }
+
+            const popupContent = `
+              <div class="popup-header">
+                <i class="fas fa-lightbulb"></i> Circuito Baja Tensión
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-info-circle"></i> Información General</h4>
+                <p><strong>Código Salida:</strong> ${attrs.SAL_COD_SAL || 'N/A'}</p>
+                <p><strong>Nombre Circuito:</strong> ${attrs.SAL_NOM_SAL || 'N/A'}</p>
+                <p><strong>Código SED:</strong> ${attrs.SAL_COD_SED || 'N/A'}</p>
+                <p><strong>Tipo Servicio:</strong> ${getTipoServicio(attrs.SAL_TIP_SRV)}</p>
+                <p><strong>Código Tramo BT:</strong> ${attrs.SAL_COD_TBT || 'N/A'}</p>
+                <p><strong>Propietario:</strong> ${getPropietario(attrs.SAL_PROP)}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-bolt"></i> Características Eléctricas</h4>
+                <p><strong>Tensión Nominal:</strong> ${attrs.SAL_TEN_NOM || 'N/A'} V</p>
+                <p><strong>Tensión Máxima:</strong> ${attrs.SAL_TEN_MAX || 'N/A'} V</p>
+                <p><strong>Corriente Nominal:</strong> ${attrs.SAL_COR_NOM || 'N/A'} A</p>
+                <p><strong>Capacidad:</strong> ${attrs.SAL_CAP_AMP || 'N/A'} A</p>
+                <p><strong>Capacidad Ruptura:</strong> ${attrs.SAL_CAP_RUP || 'N/A'} A</p>
+                <p><strong>Aislamiento BIL:</strong> ${attrs.SAL_AIS_BIL || 'N/A'}</p>
+                <p><strong>Código Fase:</strong> ${attrs.SAL_COD_FAS || 'N/A'}</p>
+                <p><strong>Cantidad Polos:</strong> ${attrs.SAL_CNT_POL || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-shield-alt"></i> Protección</h4>
+                <p><strong>Tipo Equipo:</strong> ${getTipoProteccion(attrs.SAL_EQP_TIP)}</p>
+                <p><strong>Marca:</strong> ${attrs.SAL_EQP_MAR || 'N/A'}</p>
+                <p><strong>Modelo:</strong> ${attrs.SAL_EQP_MOD || 'N/A'}</p>
+                <p><strong>Serie:</strong> ${attrs.SAL_EQP_SER || 'N/A'}</p>
+                <p><strong>Estado Equipo:</strong> ${getEstadoConservacion(attrs.SAL_EQP_EST)}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-plug"></i> Tensiones Específicas</h4>
+                <p><strong>SP Fase-Fase:</strong> ${attrs.SAL_SP_TEN_FF || 'N/A'} kV</p>
+                <p><strong>SP Fase-Neutro:</strong> ${attrs.SAL_SP_TEN_FN || 'N/A'} kV</p>
+                <p><strong>SP Código Fase:</strong> ${attrs.SAL_SP_COD_FAS || 'N/A'}</p>
+                <p><strong>AP Fase-Fase:</strong> ${attrs.SAL_AP_TEN_FF || 'N/A'} kV</p>
+                <p><strong>AP Código Fase:</strong> ${attrs.SAL_AP_COD_FAS || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-map-marker-alt"></i> Ubicación</h4>
+                <p><strong>Ubigeo:</strong> ${attrs.SAL_COD_UBI || 'N/A'}</p>
+                <p><strong>Empresa:</strong> ${attrs.SAL_COD_EMP || 'N/A'}</p>
+                <p><strong>Localidad:</strong> ${attrs.SAL_COD_LOC || 'N/A'}</p>
+                <p><strong>Sucursal:</strong> ${attrs.SAL_COD_SUC || 'N/A'}</p>
+                <p><strong>Código SET:</strong> ${attrs.SAL_COD_SET || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-calendar"></i> Fechas y Control</h4>
+                <p><strong>Puesta Servicio:</strong> ${attrs.SAL_FEC_PTA_SRV ? new Date(attrs.SAL_FEC_PTA_SRV).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Fecha Retiro:</strong> ${attrs.SAL_FEC_RET ? new Date(attrs.SAL_FEC_RET).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Creación:</strong> ${attrs.SAL_FEC_CREA ? new Date(attrs.SAL_FEC_CREA).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Actualización:</strong> ${attrs.SAL_FEC_ACT ? new Date(attrs.SAL_FEC_ACT).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Usuario Creación:</strong> ${attrs.SAL_USR_CREA || 'N/A'}</p>
+                <p><strong>Usuario Actualización:</strong> ${attrs.SAL_USR_ACT || 'N/A'}</p>
+                <p><strong>Inf. Osinergmin:</strong> ${attrs.SAL_INF_OSI === 'S' ? 'Sí' : 'No'}</p>
+                <p><strong>Estado VNR:</strong> ${attrs.SAL_VNR_EST || 'N/A'}</p>
+                <p><strong>Habilitado:</strong> ${attrs.Enabled === 1 ? 'Sí' : 'No'}</p>
+              </div>
+            `;
+            
+            L.circleMarker([geom.y, geom.x], {
+              radius: 7,
+              fillColor: color,
+              color: '#000000',
+              weight: 2,
+              opacity: 1,
+              fillOpacity: 0.8
+            })
+            .bindPopup(popupContent, { maxWidth: 450 })
+            .bindTooltip(`${icon} ${attrs.SAL_NOM_SAL || 'Circuito BT'} (${getTipoServicio(attrs.SAL_TIP_SRV)})`, {
+              permanent: false,
+              direction: 'top'
+            })
+            .addTo(capaCircuitosBT);
+          }
+        });
+
+        showNotification(`${data.features.length} circuitos BT cargados para el transformador ${codigoSED}`, 'success');
+        console.log(`Circuitos BT cargados: ${data.features.length}`);
+
+        // AQUÍ SE AGREGAN LAS LÍNEAS BT AUTOMÁTICAMENTE
+        await cargarLineasBT(codigoSED);
+
+      } catch (error) {
+        console.error('Error al cargar circuitos BT:', error);
+        showNotification(`Error al cargar circuitos BT: ${error.message}`, 'error');
+      } finally {
+        hideLoadingMessage();
+        actualizarEstadisticas();
+      }
+    }
+
+    // Función para cargar líneas de Media Tensión
+    async function cargarLineasMT() {
+      const ubigeos = document.getElementById('inputUbigeo').value.split(',').map(u => u.trim()).filter(Boolean);
+      if (ubigeos.length === 0) return;
+
+      showLoadingMessage('Cargando líneas de MT...');
+      
+      try {
+        const whereClause = ubigeos.map(u => `TMT_COD_UBI = '${u}'`).join(' OR ');
+        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/101/query';
+        const params = new URLSearchParams({
+          f: 'json',
+          where: `1=1 AND (${whereClause})`,
+          outFields: '*',
+          returnGeometry: true,
+          outSR: 4326,
+          resultRecordCount: 1000
+        });
+
+        const res = await fetch(`${url}?${params}`);
+        const data = await res.json();
+
+        capaLineasMT.clearLayers();
+
+        data.features.forEach(feature => {
+          const attrs = feature.attributes;
+          const geom = feature.geometry;
+
+          if (geom && geom.paths) {
+            let lineStyle = {
+              weight: 3,
+              opacity: 0.8
+            };
+
+            switch (attrs.TMT_COD_TIP_RED) {
+              case 'A':
+                lineStyle.color = '#E64C00';
+                lineStyle.dashArray = null;
+                break;
+              case 'S':
+                lineStyle.color = '#E69800';
+                lineStyle.dashArray = '10, 5';
+                break;
+              case 'C':
+                lineStyle.color = '#0A93FC';
+                lineStyle.dashArray = null;
+                break;
+              default:
+                lineStyle.color = '#666666';
+            }
+
+            const coordinates = geom.paths[0].map(coord => [coord[1], coord[0]]);
+            
+            const popupContent = `
+              <div class="popup-header">
+                <i class="fas fa-bolt"></i> Línea Media Tensión
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-info-circle"></i> Información General</h4>
+                <p><strong>Código:</strong> ${attrs.TMT_COD_TMT || 'N/A'}</p>
+                <p><strong>Tipo Red:</strong> ${getTipoRed(attrs.TMT_COD_TIP_RED)}</p>
+                <p><strong>Tensión Nominal:</strong> ${attrs.TMT_VAL_TEN_NOM || 'N/A'} kV</p>
+                <p><strong>Material:</strong> ${getMaterialConductor(attrs.TMT_COD_MAT_COND)}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-ruler"></i> Dimensiones</h4>
+                <p><strong>Longitud Real:</strong> ${attrs.TMT_LNG_REAL || 'N/A'} m</p>
+                <p><strong>Longitud Lineal:</strong> ${attrs.TMT_LNG_LINEAL || 'N/A'} m</p>
+                <p><strong>Nro Conductores:</strong> ${attrs.TMT_NRO_COND || 'N/A'}</p>
+                <p><strong>Sección:</strong> ${attrs.TMT_SEC_COND || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-cogs"></i> Técnico</h4>
+                <p><strong>Fases:</strong> ${attrs.TMT_COD_FAS || 'N/A'}</p>
+                <p><strong>Tipo Circuito:</strong> ${getTipoCircuito(attrs.TMT_COD_TIP_CIR)}</p>
+                <p><strong>Código Técnico:</strong> ${attrs.TMT_COD_TEC_FAS || 'N/A'}</p>
+              </div>
+            `;
+
+            L.polyline(coordinates, lineStyle)
+              .bindPopup(popupContent, { maxWidth: 400 })
+              .addTo(capaLineasMT);
+          }
+        });
+
+        console.log(`Líneas MT cargadas: ${data.features.length}`);
+      } catch (error) {
+        console.error('Error al cargar líneas MT:', error);
+        showNotification('Error al cargar líneas de Media Tensión', 'error');
+      } finally {
+        hideLoadingMessage();
+        actualizarEstadisticas();
+      }
+    }
+
+    // Función para cargar estructuras de Media Tensión
+    async function cargarEstructurasMT() {
+      const ubigeos = document.getElementById('inputUbigeo').value.split(',').map(u => u.trim()).filter(Boolean);
+      if (ubigeos.length === 0) return;
+
+      showLoadingMessage('Cargando estructuras de MT...');
+      
+      try {
+        const whereClause = ubigeos.map(u => `NOD_COD_UBI = '${u}'`).join(' OR ');
+        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/91/query';
+        const params = new URLSearchParams({
+          f: 'json',
+          where: `1=1 AND (${whereClause})`,
+          outFields: '*',
+          returnGeometry: true,
+          outSR: 4326,
+          resultRecordCount: 1000
+        });
+
+        const res = await fetch(`${url}?${params}`);
+        const data = await res.json();
+
+        capaEstructurasMT.clearLayers();
+
+        data.features.forEach(feature => {
+          const attrs = feature.attributes;
+          const geom = feature.geometry;
+
+          if (geom && geom.x && geom.y) {
+            let color = '#666666';
+            switch (attrs.NOD_COD_MAT_SPT) {
+              case 'CO': color = '#B2B2B2'; break;
+              case 'FI': color = '#FFA77F'; break;
+              case 'FG': color = '#CD6666'; break;
+              case 'FN': color = '#730000'; break;
+              case 'HO': color = '#98E600'; break;
+              case 'MA': color = '#8B4513'; break;
+              case 'RI': color = '#734C00'; break;
+              default: color = '#000000';
+            }
+
+            const popupContent = `
+              <div class="popup-header">
+                <i class="fas fa-tower-cell"></i> Estructura Media Tensión
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-info-circle"></i> Identificación</h4>
+                <p><strong>Código:</strong> ${attrs.NOD_COD_NOD || 'N/A'}</p>
+                <p><strong>Función:</strong> ${getFuncionEstructura(attrs.NOD_COD_FNC)}</p>
+                <p><strong>Sistema:</strong> ${attrs.NOD_COD_SIE || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-tools"></i> Soporte</h4>
+                <p><strong>Tipo:</strong> ${getTipoSoporte(attrs.NOD_COD_TIP_SPT)}</p>
+                <p><strong>Material:</strong> ${getMaterialSoporte(attrs.NOD_COD_MAT_SPT)}</p>
+                <p><strong>Altura:</strong> ${attrs.NOD_ALT_SPT || 'N/A'} m</p>
+                <p><strong>Esfuerzo:</strong> ${attrs.NOD_ESF_SPT || 'N/A'}</p>
+                <p><strong>Cantidad:</strong> ${attrs.NOD_CNT_SPT || 'N/A'}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-cog"></i> Estado</h4>
+                <p><strong>Conservación:</strong> ${getEstadoConservacion(attrs.NOD_EST_CONS)}</p>
+                <p><strong>Aterramiento:</strong> ${attrs.NOD_FLAG_ATER === 'S' ? 'Sí' : 'No'}</p>
+                <p><strong>Propietario:</strong> ${getPropietario(attrs.NOD_COD_PROP)}</p>
+              </div>
+              <div class="popup-section">
+                <h4><i class="fas fa-calendar"></i> Fechas</h4>
+                <p><strong>Puesta Servicio:</strong> ${attrs.NOD_FEC_PTA_SRV ? new Date(attrs.NOD_FEC_PTA_SRV).toLocaleDateString() : 'N/A'}</p>
+                <p><strong>Creación:</strong> ${attrs.NOD_FEC_CREA ? new Date(attrs.NOD_FEC_CREA).toLocaleDateString() : 'N/A'}</p>
+              </div>
+            `;
+
+            L.circleMarker([geom.y, geom.x], {
+              radius: 8,
+              fillColor: color,
+              color: '#000000',
+              weight: 2,
+              opacity: 1,
+              fillOpacity: 0.8
+            })
+            .bindPopup(popupContent, { maxWidth: 450 })
+            .bindTooltip(`🏗️ ${attrs.NOD_COD_NOD} (${getMaterialSoporte(attrs.NOD_COD_MAT_SPT)})`, {
+              permanent: false,
+              direction: 'top'
+            })
+            .addTo(capaEstructurasMT);
+          }
+        });
+
+        console.log(`Estructuras MT cargadas: ${data.features.length}`);
+      } catch (error) {
+        console.error('Error al cargar estructuras MT:', error);
+        showNotification('Error al cargar estructuras de Media Tensión', 'error');
+      } finally {
+        hideLoadingMessage();
+        actualizarEstadisticas();
+      }
+    }
+
+    // Función para cargar transformadores (mejorada con opciones BT)
+    async function cargarTransformadores() {
+      const ubigeos = document.getElementById('inputUbigeo').value.split(',').map(u => u.trim()).filter(Boolean);
+      if (ubigeos.length === 0) {
+        showNotification('Por favor, ingrese al menos un código de ubigeo', 'error');
+        return;
+      }
+
+      mostrarLoading(true);
+
+      try {
+        const whereClause = ubigeos.map(u => `SED_COD_UBI = '${u}'`).join(' OR ');
+        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/96/query';
+        const params = new URLSearchParams({
+          f: 'json',
+          where: `1=1 AND (${whereClause})`,
+          outFields: '*',
+          returnGeometry: true,
+          outSR: 4326,
+          resultRecordCount: 1000
+        });
+        const res = await fetch(`${url}?${params}`);
+        const data = await res.json();
+
+        capaTrafo.clearLayers();
+        capaCirculos.clearLayers();
+
+        data.features.forEach(f => {
+          const lat = f.geometry.y, lon = f.geometry.x;
+          const id = f.attributes.SED_COD_SED;
+          const nombre = f.attributes.SED_NOM_SED;
+          const potencia = f.attributes.SED_POT_NOM || 'N/A';
+          const tension = f.attributes.SED_TEN_PRI || 'N/A';
+
+          const transformerIcon = L.divIcon({
+            className: 'transformer-icon',
+            html: '⚡',
+            iconSize: [35, 35],
+            iconAnchor: [17.5, 17.5]
+          });
+
+          // Popup mejorado con opciones de carga de red BT
+          const popupContent = `
+            <div class="popup-header">
+              <i class="fas fa-bolt"></i> Transformador ${id}
+            </div>
+            <div class="popup-section">
+              <h4><i class="fas fa-info-circle"></i> Información General</h4>
+              <p><strong>Código:</strong> ${id}</p>
+              <p><strong>Nombre:</strong> ${nombre}</p>
+              <p><strong>Potencia:</strong> ${potencia} kVA</p>
+              <p><strong>Tensión:</strong> ${tension} kV</p>
+            </div>
+            <div class="popup-buttons">
+              <button onclick="mostrarSuministros('${id}')" class="btn-popup-primary">
+                <i class="fas fa-home"></i> Ver Suministros
+              </button>
+              <button onclick="cargarCircuitosBT('${id}')" class="btn-popup-secondary">
+                <i class="fas fa-lightbulb"></i> Circuitos BT
+              </button>
+              <button onclick="cargarPostesBT('${id}')" class="btn-popup-info">
+                <i class="fas fa-lightbulb"></i> Postes BT
+              </button>
+              <button onclick="cargarRedCompletaBT('${id}')" class="btn-popup-primary">
+                <i class="fas fa-network-wired"></i> Red Completa BT
+              </button>
+            </div>
+          `;
+
+          L.marker([lat, lon], { icon: transformerIcon })
+            .addTo(capaTrafo)
+            .bindPopup(popupContent, { maxWidth: 400 });
+
+          // Agregar círculo si está activado
+          if (document.getElementById('toggleCirculos').checked) {
+            const radio = parseFloat(document.getElementById('inputRadio').value) || 300;
+            L.circle([lat, lon], {
+              color: '#28a745',
+              fillColor: '#28a745',
+              fillOpacity: 0.1,
+              radius: radio,
+              weight: 2
+            }).addTo(capaCirculos);
+          }
+        });
+
+        if (data.features.length > 0) {
+          map.fitBounds(capaTrafo.getBounds().pad(0.1));
+          showNotification(`${data.features.length} transformadores cargados exitosamente`, 'success');
+        } else {
+          showNotification('No se encontraron transformadores para los ubigeos especificados', 'info');
+        }
+
+        // Cargar también líneas y estructuras MT si hay ubigeos
+        await Promise.all([
+          cargarLineasMT(),
+          cargarEstructurasMT()
+        ]);
+
+      } catch (error) {
+        console.error('Error al cargar transformadores:', error);
+        showNotification('Error al cargar transformadores: ' + error.message, 'error');
+      } finally {
+        mostrarLoading(false);
+        actualizarEstadisticas();
+      }
+    }
+
+    // Función para cargar red completa de BT
+    async function cargarRedCompletaBT(codigoSED) {
+      if (!codigoSED) {
+        showNotification('Código SED no válido', 'error');
+        return;
+      }
+
+      document.getElementById('inputID').value = codigoSED;
+      transformadorSeleccionado = codigoSED;
+      
+      showNotification(`Cargando red completa BT del transformador ${codigoSED}...`, 'info', 6000);
+      
+      try {
+        // Cargar todos los elementos de BT en paralelo
+        await Promise.all([
+          mostrarSuministros(codigoSED),
+          cargarCircuitosBT(codigoSED), // Esto incluye las líneas BT automáticamente
+          cargarPostesBT(codigoSED)
+        ]);
+
+        showNotification(`Red completa BT del transformador ${codigoSED} cargada exitosamente`, 'success');
+        
+        // Ajustar vista del mapa a todos los elementos cargados
+        const allLayers = [
+          ...capaSuministros.getLayers(),
+          ...capaCircuitosBT.getLayers(),
+          ...capaPostesBT.getLayers(),
+          ...capaLineasBT.getLayers()
+        ];
+        
+        if (allLayers.length > 0) {
+          const group = new L.FeatureGroup(allLayers);
+          map.fitBounds(group.getBounds().pad(0.1));
+        }
+
+      } catch (error) {
+        console.error('Error al cargar red BT completa:', error);
+        showNotification('Error al cargar algunos elementos de la red BT', 'error');
+      }
+    }
+
+    // Función para mostrar suministros (corregida)
+    async function mostrarSuministros(id) {
+      showLoadingMessage('Cargando suministros...');
+      
+      try {
+        capaSuministros.clearLayers();
+        suministrosFiltrados = [];
+
+        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/24/query';
+        const params = new URLSearchParams({
+          f: 'json',
+          where: `SUM_COD_SED='${id}'`,
+          outFields: '*',
+          returnGeometry: true,
+          outSR: 4326,
+          resultRecordCount: 1000
+        });
+
+        const res = await fetch(`${url}?${params}`);
+        
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(data.error.message || 'Error en la consulta');
+        }
+
+        if (!data.features || data.features.length === 0) {
+          showNotification(`No se encontraron suministros para el transformador ${id}`, 'info');
+          return;
+        }
+
+        data.features.forEach(f => {
+          const lat = f.geometry.y, lon = f.geometry.x;
+          const a = f.attributes;
+
+          const popupContent = `
+            <div class="popup-header">
+              <i class="fas fa-home"></i> ${a.SUM_NOM_SUM}
+            </div>
+            <div class="popup-section">
+              <h4><i class="fas fa-map-marker-alt"></i> Ubicación</h4>
+              <p><strong>Dirección:</strong> ${a.SUM_DIR_SUM || 'N/A'}</p>
+              <p><strong>Código:</strong> ${a.SUM_COD_SUM}</p>
+              <p><strong>Transformador:</strong> ${a.SUM_COD_SED}</p>
+            </div>
+            <div class="popup-section">
+              <h4><i class="fas fa-bolt"></i> Datos Eléctricos</h4>
+              <p><strong>Max. Demanda:</strong> ${a.SUM_MAX_DEM || 'N/A'} kW</p>
+              <p><strong>Potencia Equiv:</strong> ${a.SUM_POT_EQT || 'N/A'} kVA</p>
+              <p><strong>Tensión:</strong> ${a.SUM_TEN_SUM || 'N/A'} V</p>
+              <p><strong>Fases:</strong> ${a.SUM_MED_FAS || 'N/A'}</p>
+            </div>
+            <div class="popup-section">
+              <h4><i class="fas fa-dollar-sign"></i> Facturación</h4>
+              <p><strong>Tarifa:</strong> ${a.SUM_TAR_SUM || 'N/A'}</p>
+              <p><strong>Monto:</strong> S/ ${a.SUM_FAC_MNT || 'N/A'}</p>
+              <p><strong>FISE:</strong> ${a.SUM_CLI_FISE ? 'Sí' : 'No'}</p>
+              <p><strong>Cliente Mayor:</strong> ${a.SUM_CLI_MAY ? 'Sí' : 'No'}</p>
+            </div>
+            <div class="popup-section">
+              <h4><i class="fas fa-info-circle"></i> Estado</h4>
+              <p><strong>Estado:</strong> ${a.SUM_EST_SUM || 'N/A'}</p>
+              <p><strong>VNR:</strong> ${a.SUM_VNR_EST || 'N/A'}</p>
+              <p><strong>Tipo Servicio:</strong> ${a.SUM_TIP_SRV || 'N/A'}</p>
+            </div>
+          `;
+
+          L.circleMarker([lat, lon], {
+            radius: 6,
+            color: '#007bff',
+            fillColor: '#007bff',
+            fillOpacity: 0.3,
+            weight: 3 
+          })
+          .bindPopup(popupContent, { maxWidth: 400 })
+          .bindTooltip(`🏠 ${a.SUM_NOM_SUM}`, { permanent: false, direction: 'top' })
+          .addTo(capaSuministros);
+
+          suministrosFiltrados.push({
+            CODIGO: a.SUM_COD_SUM,
+            NOMBRE: a.SUM_NOM_SUM,
+            DIRECCION: a.SUM_DIR_SUM,
+            LAT: lat,
+            LON: lon,
+            TRANSFORMADOR: a.SUM_COD_SED
+          });
+        });
+
+        if (suministrosFiltrados.length) {
+          map.fitBounds(capaSuministros.getBounds().pad(0.2));
+        }
+
+        showNotification(`${data.features.length} suministros cargados para el transformador ${id}`, 'success');
+        console.log(`Suministros cargados: ${data.features.length}`);
+
+      } catch (error) {
+        console.error('Error al cargar suministros:', error);
+        showNotification(`Error al cargar suministros: ${error.message}`, 'error');
+      } finally {
+        hideLoadingMessage();
+        actualizarEstadisticas();
+      }
+    }
+
+    // Función para cargar capas especiales
+    async function toggleCapasEspeciales() {
+      const select = document.getElementById('selectCapas');
+      const valor = select.value;
+
+      if (!valor) return;
+
+      switch (valor) {
+        case 'mt_lines':
+          await cargarLineasMT();
+          break;
+        case 'mt_structures':
+          await cargarEstructurasMT();
+          break;
+        case 'all_network':
+          await cargarTransformadores();
+          break;
+      }
+    }
+
+    // Funciones auxiliares para obtener descripciones
+    function getTipoRed(codigo) {
+      const tipos = {
+        'A': 'Aéreo',
+        'S': 'Subterráneo', 
+        'C': 'Subacuático'
+      };
+      return tipos[codigo] || codigo || 'N/A';
+    }
+
+    function getMaterialConductor(codigo) {
+      const materiales = {
+        'AL': 'Aluminio',
+        'CU': 'Cobre'
+      };
+      return materiales[codigo] || codigo || 'N/A';
+    }
+
+    function getTipoCircuito(codigo) {
+      const tipos = {
+        'L': 'Lateral',
+        'T': 'Troncal'
+      };
+      return tipos[codigo] || codigo || 'N/A';
+    }
+
+    function getFuncionEstructura(codigo) {
+      const funciones = {
+        'ALI': 'Alineamiento',
+        'CAD': 'Cambio de Dirección',
+        'FDL': 'Fin e Inicio de Línea'
+      };
+      return funciones[codigo] || codigo || 'N/A';
+    }
+
+    function getTipoSoporte(codigo) {
+      const tipos = {
+        'BIP': 'Biposte',
+        'EST': 'Estructura',
+        'MON': 'Monoposte',
+        'NIN': 'Ninguno'
+      };
+      return tipos[codigo] || codigo || 'N/A';
+    }
+
+    function getMaterialSoporte(codigo) {
+      const materiales = {
+        'CO': 'Concreto',
+        'FI': 'Fierro',
+        'FG': 'Fierro Galvanizado',
+        'FN': 'Fierro Negro',
+        'HO': 'Hormigón',
+        'MA': 'Madera',
+        'RI': 'Riel',
+        'NN': 'Ninguno'
+      };
+      return materiales[codigo] || codigo || 'N/A';
+    }
+
+    function getEstadoConservacion(codigo) {
+      const estados = {
+        'B': 'Bueno',
+        'M': 'Malo',
+        '1': 'Regular 1',
+        '2': 'Regular 2'
+      };
+      return estados[codigo] || codigo || 'N/A';
+    }
+
+    function getPropietario(codigo) {
+      const propietarios = {
+        'T': 'Tercero',
+        'D': 'Distribuidor',
+        'C': 'Clandestino'
+      };
+      return propietarios[codigo] || codigo || 'N/A';
+    }
+
+    function getTipoServicio(codigo) {
+      const tipos = {
+        'AP': 'Alumbrado Público',
+        'SP': 'Servicio Particular',
+        'SP+AP': 'Servicio Particular + Alumbrado Público'
+      };
+      return tipos[codigo] || codigo || 'N/A';
+    }
+
+    function getTipoProteccion(codigo) {
+      const tipos = {
+        'FU': 'Fusible',
+        'TM': 'Interruptor Termomagnético',
+        'CM': 'Interruptor Automático Caja Moldeada'
+      };
+      return tipos[codigo] || codigo || 'N/A';
+    }
+
+    // Funciones existentes mejoradas
+    function buscarID() {
+      const id = document.getElementById('inputID').value.trim();
+      if (!id) {
+        showNotification('Por favor, ingrese un ID de transformador', 'error');
+        return;
+      }
+      cargarRedCompletaBT(id);
+    }
+
+    function descargarCSV() {
+      if (!suministrosFiltrados.length) {
+        showNotification('No hay datos de suministros para descargar', 'error');
+        return;
+      }
+      
+      const encabezado = Object.keys(suministrosFiltrados[0]).join(',');
+      const filas = suministrosFiltrados.map(obj => 
+        Object.values(obj).map(v => `"${v}"`).join(',')
+      ).join('\n');
+      const csv = `${encabezado}\n${filas}`;
+      
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `suministros_${transformadorSeleccionado || 'datos'}_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      
+      showNotification('Archivo CSV descargado exitosamente', 'success');
+    }
+
+    function cargarDesdeExcel() {
+      const archivo = document.getElementById('inputArchivo').files[0];
+      if (!archivo) {
+        showNotification('Por favor, selecciona un archivo CSV', 'error');
+        return;
+      }
+
+      mostrarLoading(true);
+      capaExcel.clearLayers();
+
+      Papa.parse(archivo, {
+        header: true,
+        skipEmptyLines: true,
+        complete: function (result) {
+          result.data.forEach(row => {
+            const lat = parseFloat(row['LATITTUD'] || row['LATITUD']);
+            const lon = parseFloat(row['LONGITUD']);
+            const nombre = row['NOMBRE'] || 'Sin nombre';
+            const comunidad = row['COMUNIDAD'] || '';
+            const sector = row['SECTOR'] || '';
+
+            if (!isNaN(lat) && !isNaN(lon)) {
+              const popupContent = `
+                <div class="popup-header">
+                  <i class="fas fa-home"></i> Vivienda Proyectada
+                </div>
+                <div class="popup-section">
+                  <h4><i class="fas fa-info-circle"></i> Información</h4>
+                  <p><strong>Nombre:</strong> ${nombre}</p>
+                  <p><strong>Comunidad:</strong> ${comunidad}</p>
+                  <p><strong>Sector:</strong> ${sector}</p>
+                  <p><strong>Coordenadas:</strong> ${lat.toFixed(6)}, ${lon.toFixed(6)}</p>
+                </div>
+              `;
+
+              L.circleMarker([lat, lon], {
+                radius: 7,
+                color: '#dc3545',
+                fillColor: '#dc3545',
+                fillOpacity: 0.3,
+                weight: 3
+              })
+              .bindPopup(popupContent, { maxWidth: 350 })
+              .bindTooltip(`🏠 ${nombre}`, { permanent: false, direction: 'top' })
+              .addTo(capaExcel);
+            }
+          });
+
+          if (capaExcel.getLayers().length) {
+            map.fitBounds(capaExcel.getBounds().pad(0.1));
+            showNotification(`${capaExcel.getLayers().length} puntos proyectados cargados`, 'success');
+          } else {
+            showNotification('No se pudieron cargar puntos del archivo CSV', 'error');
+          }
+
+          mostrarLoading(false);
+          actualizarEstadisticas();
+        },
+        error: function(error) {
+          console.error('Error al parsear CSV:', error);
+          showNotification('Error al procesar el archivo CSV', 'error');
+          mostrarLoading(false);
+        }
+      });
+    }
+
+    function toggleCirculos() {
+      if (document.getElementById('toggleCirculos').checked) {
+        capaTrafo.eachLayer(layer => {
+          if (layer.getLatLng) {
+            const latlng = layer.getLatLng();
+            const radio = parseFloat(document.getElementById('inputRadio').value) || 300;
+            L.circle([latlng.lat, latlng.lng], {
+              color: '#28a745',
+              fillColor: '#28a745',
+              fillOpacity: 0.1,
+              radius: radio,
+              weight: 2
+            }).addTo(capaCirculos);
+          }
+        });
+      } else {
+        capaCirculos.clearLayers();
+      }
+      actualizarEstadisticas();
+    }
+
+    function limpiarTodo() {
+      if (confirm('¿Está seguro de que desea limpiar todas las capas?')) {
+        capaTrafo.clearLayers();
+        capaSuministros.clearLayers();
+        capaExcel.clearLayers();
+        capaCirculos.clearLayers();
+        capaStreetView.clearLayers();
+        capaLineasMT.clearLayers();
+        capaEstructurasMT.clearLayers();
+        capaCircuitosBT.clearLayers();
+        capaPostesBT.clearLayers();
+        capaLineasBT.clearLayers();
+        
+        suministrosFiltrados = [];
+        transformadorSeleccionado = null;
+        
+        document.getElementById('inputUbigeo').value = '';
+        document.getElementById('inputID').value = '';
+        document.getElementById('selectCapas').value = '';
+        document.getElementById('toggleCirculos').checked = false;
+        
+        actualizarEstadisticas();
+        showNotification('Todas las capas han sido limpiadas', 'success');
+      }
+    }
+
+    // Funciones 3D simplificadas (mantenidas para compatibilidad)
+    function createTransformer3D(x, z, name) {
+      const group = new THREE.Group();
+      const baseGeometry = new THREE.BoxGeometry(2, 0.5, 1.5);
+      const baseMaterial = new THREE.MeshLambertMaterial({ color: 0x666666 });
+      const base = new THREE.Mesh(baseGeometry, baseMaterial);
+      base.position.y = 0.25;
+      base.castShadow = true;
+      group.add(base);
+      group.position.set(x, 0, z);
+      group.userData = { type: 'transformer', name: name || 'Transformador' };
+      return group;
+    }
+
+    function createPole3D(x, z, name) {
+      const group = new THREE.Group();
+      const poleGeometry = new THREE.CylinderGeometry(0.15, 0.2, 8, 12);
+      const poleMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+      const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+      pole.position.y = 4;
+      pole.castShadow = true;
+      group.add(pole);
+      group.position.set(x, 0, z);
+      group.userData = { type: 'pole', name: name || 'Suministro' };
+      return group;
+    }
+
+    function createHouse3D(x, z, name) {
+      const group = new THREE.Group();
+      const houseGeometry = new THREE.BoxGeometry(2, 2, 2);
+      const houseMaterial = new THREE.MeshLambertMaterial({ color: 0xd4af37 });
+      const house = new THREE.Mesh(houseGeometry, houseMaterial);
+      house.position.y = 1;
+      house.castShadow = true;
+      group.add(house);
+      group.position.set(x, 0, z);
+      group.userData = { type: 'house', name: name || 'Casa' };
+      return group;
+    }
+
+    function init3D() {
+      const container = document.getElementById('view3D');
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87CEEB);
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(20, 15, 20);
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      container.appendChild(renderer.domElement);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambientLight);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      directionalLight.position.set(50, 50, 50);
+      directionalLight.castShadow = true;
+      scene.add(directionalLight);
+
+      const groundGeometry = new THREE.PlaneGeometry(200, 200);
+      const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      if (typeof THREE.OrbitControls !== 'undefined') {
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+      }
+
+      cargarElementos3D();
+    }
+
+    function cargarElementos3D() {
+      [...transformadores3D, ...postes3D, ...casas3D].forEach(element => {
+        scene.remove(element);
+      });
+      transformadores3D = [];
+      postes3D = [];
+      casas3D = [];
+
+      capaTrafo.eachLayer(layer => {
+        if (layer.getLatLng) {
+          const latlng = layer.getLatLng();
+          const x = (latlng.lng + 69.97) * 100;
+          const z = (latlng.lat + 15.55) * 100;
+          const transformer = createTransformer3D(x, z, 'Transformador');
+          scene.add(transformer);
+          transformadores3D.push(transformer);
+        }
+      });
+
+      capaSuministros.eachLayer(layer => {
+        if (layer.getLatLng) {
+          const latlng = layer.getLatLng();
+          const x = (latlng.lng + 69.97) * 100;
+          const z = (latlng.lat + 15.55) * 100;
+          const pole = createPole3D(x, z, 'Suministro');
+          scene.add(pole);
+          postes3D.push(pole);
+        }
+      });
+
+      capaExcel.eachLayer(layer => {
+        if (layer.getLatLng) {
+          const latlng = layer.getLatLng();
+          const x = (latlng.lng + 69.97) * 100;
+          const z = (latlng.lat + 15.55) * 100;
+          const house = createHouse3D(x, z, 'Casa');
+          scene.add(house);
+          casas3D.push(house);
+        }
+      });
+
+      document.getElementById('countTransformers3D').textContent = transformadores3D.length;
+      document.getElementById('countPoles3D').textContent = postes3D.length;
+      document.getElementById('countExcel3D').textContent = casas3D.length;
+    }
+
+    function animate3D() {
+      if (document.getElementById('view3D').style.display !== 'none') {
+        requestAnimationFrame(animate3D);
+        if (controls) controls.update();
+        renderer.render(scene, camera);
+      }
+    }
+
+    function toggle3DView() {
+      const view3D = document.getElementById('view3D');
+      if (view3D.style.display === 'none' || view3D.style.display === '') {
+        view3D.style.display = 'block';
+        if (!scene) {
+          init3D();
+        } else {
+          cargarElementos3D();
+        }
+        animate3D();
+      } else {
+        view3D.style.display = 'none';
+      }
+    }
+
+    function cerrar3DView() {
+      document.getElementById('view3D').style.display = 'none';
+    }
+
+    // Funciones Street View (mantenidas)
+    function activarStreetView() {
+      streetViewActive = true;
+      document.getElementById('streetViewPanel').style.display = 'block';
+      map.getContainer().classList.add('street-view-active');
+      map.on('click', onMapClickStreetView);
+    }
+
+    function desactivarStreetView() {
+      streetViewActive = false;
+      document.getElementById('streetViewPanel').style.display = 'none';
+      map.getContainer().classList.remove('street-view-active');
+      map.off('click', onMapClickStreetView);
+      capaStreetView.clearLayers();
+    }
+
+    function onMapClickStreetView(e) {
+      if (!streetViewActive) return;
+      
+      const lat = e.latlng.lat;
+      const lng = e.latlng.lng;
+      
+      const marker = L.divIcon({
+        className: 'street-view-marker',
+        html: '👁️',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+      
+      L.marker([lat, lng], { icon: marker })
+        .bindPopup(`
+          <div style="text-align: center;">
+            <b>📍 Vista Street View</b><br>
+            <small>Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}</small><br>
+            <button onclick="abrirGoogleStreetView(${lat}, ${lng})" 
+                    style="margin-top: 5px; padding: 5px 10px; background: #4285f4; color: white; border: none; border-radius: 3px;">
+              🌍 Ver en Google Street View
+            </button>
+          </div>
+        `)
+        .addTo(capaStreetView)
+        .openPopup();
+    }
+
+    function abrirGoogleStreetView(lat, lng) {
+      const url = `https://www.google.com/maps/@${lat},${lng},3a,75y,0h,90t/data=!3m6!1e1!3m4!1s0x0:0x0!2e0!7i13312!8i6656`;
+      window.open(url, '_blank');
+    }
+
+    // Manejo de redimensionamiento
+    window.addEventListener('resize', () => {
+      if (camera && renderer) {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+    });
+
+    // Inicialización
+    actualizarEstadisticas();
+    showNotification('Sistema de red eléctrica listo. Ingrese ubigeos o un ID de transformador para comenzar.', 'info', 5000);
+  </script>
+</body>
+</html>
