@@ -1,12 +1,12 @@
-<!DOCTYPE html>
+﻿?<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <title>Sistema Integral de Red Eléctrica - Electro Puno</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://threejs.org/build/three.min.js"></script>
-  <script src="https://threejs.org/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
   <style>
     html, body {
@@ -461,6 +461,14 @@
     <button onclick="descargarCSV()" class="btn-success" title="Descargar datos CSV">
       <i class="fas fa-download"></i> CSV
     </button>
+
+    <button onclick="generarReporteMetradoTrafo()" class="btn-success" title="Reporte de metrado del transformador seleccionado en Excel">
+      <i class="fas fa-file-excel"></i> Metrado Excel
+    </button>
+
+    <button onclick="generarReporteDXF()" class="btn-warning" title="Exportar el circuito seleccionado a DXF georreferenciado">
+      <i class="fas fa-file-code"></i> DXF
+    </button>
     
     <input type="file" id="inputArchivo" accept=".csv" onchange="cargarDesdeExcel()" title="Cargar archivo CSV">
     
@@ -580,21 +588,75 @@
     });
 
     // Capas de datos
-    let capaTrafo = L.layerGroup().addTo(map);
-    let capaSuministros = L.layerGroup().addTo(map);
-    let capaExcel = L.layerGroup().addTo(map);
-    let capaCirculos = L.layerGroup().addTo(map);
-    let capaStreetView = L.layerGroup().addTo(map);
+    let capaTrafo = L.featureGroup().addTo(map);
+    let capaSuministros = L.featureGroup().addTo(map);
+    let capaExcel = L.featureGroup().addTo(map);
+    let capaCirculos = L.featureGroup().addTo(map);
+    let capaStreetView = L.featureGroup().addTo(map);
     
     // Nuevas capas para MT y BT
-    let capaLineasMT = L.layerGroup().addTo(map);
-    let capaEstructurasMT = L.layerGroup().addTo(map);
-    let capaCircuitosBT = L.layerGroup().addTo(map);
-    let capaPostesBT = L.layerGroup().addTo(map);
-    let capaLineasBT = L.layerGroup().addTo(map); // Nueva capa para líneas BT
+    let capaLineasMT = L.featureGroup().addTo(map);
+    let capaEstructurasMT = L.featureGroup().addTo(map);
+    let capaCircuitosBT = L.featureGroup().addTo(map);
+    let capaPostesBT = L.featureGroup().addTo(map);
+    let capaLineasBT = L.featureGroup().addTo(map); // Nueva capa para líneas BT
     
     let suministrosFiltrados = [];
     let transformadorSeleccionado = null;
+    window.transformadorSeleccionado = null;
+    const ARCGIS_BASE_URL = 'https://gis.electropuno.com.pe/arcgis_server/rest/services/RedElectroPuno/MapServer';
+
+    function arcgisQueryUrl(layerId) {
+      return `${ARCGIS_BASE_URL}/${layerId}/query`;
+    }
+
+    function sqlValue(value) {
+      return String(value ?? '').trim().replace(/'/g, "''");
+    }
+
+    function whereEquals(field, value) {
+      return `${field} = '${sqlValue(value)}'`;
+    }
+
+    function getValue(attrs, fields, fallback = 'N/A') {
+      for (const field of fields) {
+        const value = attrs?.[field];
+        if (value !== undefined && value !== null && value !== '') {
+          return value;
+        }
+      }
+      return fallback;
+    }
+
+    function pointToLatLng(geom) {
+      const lat = Number(geom?.y);
+      const lon = Number(geom?.x);
+      return Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+    }
+
+    function pathsToLatLngs(geom) {
+      if (!geom?.paths) return [];
+      return geom.paths
+        .map(path => path
+          .map(coord => [Number(coord[1]), Number(coord[0])])
+          .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon)))
+        .filter(path => path.length > 1);
+    }
+
+    function fitToLayers(layersOrGroup, padding = 0.1) {
+      const layers = Array.isArray(layersOrGroup) ? layersOrGroup : layersOrGroup.getLayers();
+      if (!layers.length) return false;
+
+      const group = Array.isArray(layersOrGroup) ? L.featureGroup(layers) : layersOrGroup;
+      const bounds = group.getBounds();
+
+      if (bounds?.isValid?.()) {
+        map.fitBounds(bounds.pad(padding));
+        return true;
+      }
+
+      return false;
+    }
 
     // Control de capas mejorado
     const capasBase = { 
@@ -691,11 +753,11 @@
       showLoadingMessage('Cargando líneas de BT...');
       
       try {
-        // Usar la capa 26 - Tramo Baja Tensión con filtro por TBT_COD_SED
-        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/26/query';
+        // Capa 33: Tramo de Linea de Baja Tension.
+        const url = arcgisQueryUrl(33);
         const params = new URLSearchParams({
           f: 'json',
-          where: `TBT_COD_SED = '${codigoSED}'`,
+          where: whereEquals('TBT_COD_SED', codigoSED),
           outFields: '*',
           returnGeometry: true,
           outSR: 4326,
@@ -715,17 +777,30 @@
         }
 
         capaLineasBT.clearLayers();
+        const features = data.features || [];
 
-        if (!data.features || data.features.length === 0) {
+        if (!features.length) {
           showNotification(`No se encontraron líneas BT para el transformador ${codigoSED}`, 'info');
           return;
         }
 
-        data.features.forEach(feature => {
-          const attrs = feature.attributes;
+        features.forEach(feature => {
+          const attrs = feature.attributes || {};
           const geom = feature.geometry;
+          const paths = pathsToLatLngs(geom);
 
-          if (geom && geom.paths) {
+          if (paths.length) {
+            const materialConductor = getValue(attrs, ['TBT_SP_MAT_CND', 'TBT_AP_MAT_CND']);
+            const seccionConductor = getValue(attrs, ['TBT_SP_SEC_CND', 'TBT_AP_SEC_CND']);
+            const claseConductor = getValue(attrs, ['TBT_SP_CLS_CND', 'TBT_AP_CLS_CND']);
+            const nroConductores = getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND']);
+            const tipoFabricacion = getValue(attrs, ['TBT_SP_TIP_FAB', 'TBT_AP_TIP_FAB']);
+            const fase = getValue(attrs, ['TBT_SP_COD_FAS', 'TBT_AP_COD_FAS', 'TBT_COD_TEC_FAS']);
+            const longitud = getValue(attrs, ['TBT_LONG', 'SHAPE.STLength()']);
+            const tensionSPFF = getValue(attrs, ['TBT_SP_TEN_FF']);
+            const tensionSPFN = getValue(attrs, ['TBT_SP_TEN_FN']);
+            const tensionAPFF = getValue(attrs, ['TBT_AP_TEN_FF']);
+
             const popupContent = `
               <div class="popup-header">
                 <i class="fas fa-plug"></i> Línea Baja Tensión
@@ -734,25 +809,26 @@
                 <h4><i class="fas fa-info-circle"></i> Información General</h4>
                 <p><strong>Código Tramo:</strong> ${attrs.TBT_COD_TBT || 'N/A'}</p>
                 <p><strong>Código SED:</strong> ${attrs.TBT_COD_SED || 'N/A'}</p>
+                <p><strong>Circuito:</strong> ${attrs.TBT_NOM_SAL || attrs.TBT_COD_SAL || 'N/A'}</p>
+                <p><strong>Tipo Servicio:</strong> ${getTipoServicio(attrs.TBT_TIP_SRV)}</p>
                 <p><strong>Tipo Red:</strong> ${getTipoRed(attrs.TBT_COD_TIP_RED)}</p>
-                <p><strong>Material Conductor:</strong> ${getMaterialConductor(attrs.TBT_COD_MAT_COND)}</p>
-                <p><strong>Tipo Circuito:</strong> ${getTipoCircuito(attrs.TBT_COD_TIP_CIR)}</p>
+                <p><strong>Material Conductor:</strong> ${getMaterialConductor(materialConductor)}</p>
               </div>
               <div class="popup-section">
                 <h4><i class="fas fa-ruler"></i> Características Físicas</h4>
-                <p><strong>Longitud Real:</strong> ${attrs.TBT_LNG_REAL || 'N/A'} m</p>
-                <p><strong>Longitud Lineal:</strong> ${attrs.TBT_LNG_LINEAL || 'N/A'} m</p>
-                <p><strong>Nro Conductores:</strong> ${attrs.TBT_NRO_COND || 'N/A'}</p>
-                <p><strong>Sección Conductor:</strong> ${attrs.TBT_SEC_COND || 'N/A'} mm²</p>
-                <p><strong>Clase Conductor:</strong> ${attrs.TBT_CLS_COND || 'N/A'}</p>
+                <p><strong>Longitud:</strong> ${longitud} m</p>
+                <p><strong>Nro Conductores:</strong> ${nroConductores}</p>
+                <p><strong>Sección Conductor:</strong> ${seccionConductor} mm²</p>
+                <p><strong>Clase Conductor:</strong> ${claseConductor}</p>
               </div>
               <div class="popup-section">
                 <h4><i class="fas fa-bolt"></i> Características Eléctricas</h4>
-                <p><strong>Tensión Nominal:</strong> ${attrs.TBT_VAL_TEN_NOM || 'N/A'} V</p>
-                <p><strong>Corriente Máxima:</strong> ${attrs.TBT_COR_MAX || 'N/A'} A</p>
-                <p><strong>Fases:</strong> ${attrs.TBT_COD_FAS || 'N/A'}</p>
+                <p><strong>Tensión SP FF:</strong> ${tensionSPFF} kV</p>
+                <p><strong>Tensión SP FN:</strong> ${tensionSPFN} kV</p>
+                <p><strong>Tensión AP FF:</strong> ${tensionAPFF} kV</p>
+                <p><strong>Fases:</strong> ${fase}</p>
                 <p><strong>Código Técnico:</strong> ${attrs.TBT_COD_TEC_FAS || 'N/A'}</p>
-                <p><strong>Tipo Fabricación:</strong> ${attrs.TBT_TIP_FAB || 'N/A'}</p>
+                <p><strong>Tipo Fabricación:</strong> ${tipoFabricacion}</p>
               </div>
               <div class="popup-section">
                 <h4><i class="fas fa-map-marker-alt"></i> Ubicación</h4>
@@ -803,27 +879,26 @@
             }
 
             // Variaciones según material del conductor
-            if (attrs.TBT_COD_MAT_COND === 'CU') {
+            if (materialConductor === 'CU') {
               lineStyle.color = '#1e90ff'; // Azul dodger para cobre
-            } else if (attrs.TBT_COD_MAT_COND === 'AL') {
+            } else if (materialConductor === 'AL') {
               lineStyle.color = '#4169e1'; // Azul real para aluminio
             }
 
-            // Convertir coordenadas del polígono/línea
-            const coordinates = geom.paths[0].map(coord => [coord[1], coord[0]]);
-            
-            L.polyline(coordinates, lineStyle)
-              .bindPopup(popupContent, { maxWidth: 450 })
-              .bindTooltip(`🔵 Línea BT ${getMaterialConductor(attrs.TBT_COD_MAT_COND)} ${attrs.TBT_SEC_COND || ''}mm² (${getTipoRed(attrs.TBT_COD_TIP_RED)})`, {
-                permanent: false,
-                direction: 'center'
-              })
-              .addTo(capaLineasBT);
+            paths.forEach(coordinates => {
+              L.polyline(coordinates, lineStyle)
+                .bindPopup(popupContent, { maxWidth: 450 })
+                .bindTooltip(`🔵 Línea BT ${getMaterialConductor(materialConductor)} ${seccionConductor !== 'N/A' ? `${seccionConductor}mm²` : ''} (${getTipoRed(attrs.TBT_COD_TIP_RED)})`, {
+                  permanent: false,
+                  direction: 'center'
+                })
+                .addTo(capaLineasBT);
+            });
           }
         });
 
-        showNotification(`${data.features.length} líneas BT cargadas para el transformador ${codigoSED}`, 'success');
-        console.log(`Líneas BT cargadas: ${data.features.length}`);
+        showNotification(`${capaLineasBT.getLayers().length} líneas BT cargadas para el transformador ${codigoSED}`, 'success');
+        console.log(`Líneas BT cargadas: ${capaLineasBT.getLayers().length}`);
 
       } catch (error) {
         console.error('Error al cargar líneas BT:', error);
@@ -844,10 +919,10 @@
       showLoadingMessage('Cargando postes de BT...');
       
       try {
-        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/27/query';
+        const url = arcgisQueryUrl(27);
         const params = new URLSearchParams({
           f: 'json',
-          where: `NOD_COD_SED = '${codigoSED}'`,
+          where: whereEquals('NOD_COD_SED', codigoSED),
           outFields: '*',
           returnGeometry: true,
           outSR: 4326,
@@ -867,17 +942,19 @@
         }
 
         capaPostesBT.clearLayers();
+        const features = data.features || [];
 
-        if (!data.features || data.features.length === 0) {
+        if (!features.length) {
           showNotification(`No se encontraron postes BT para el transformador ${codigoSED}`, 'info');
           return;
         }
 
-        data.features.forEach(feature => {
-          const attrs = feature.attributes;
+        features.forEach(feature => {
+          const attrs = feature.attributes || {};
           const geom = feature.geometry;
+          const latlng = pointToLatLng(geom);
 
-          if (geom && geom.x && geom.y) {
+          if (latlng) {
             const popupContent = `
               <div class="popup-header">
                 <i class="fas fa-lightbulb"></i> Poste Baja Tensión
@@ -936,7 +1013,7 @@
               default: color = '#4169E1'; // Azul por defecto
             }
 
-            L.circleMarker([geom.y, geom.x], {
+            L.circleMarker(latlng, {
               radius: 7,
               fillColor: color,
               color: '#000000',
@@ -953,8 +1030,8 @@
           }
         });
 
-        showNotification(`${data.features.length} postes BT cargados para el transformador ${codigoSED}`, 'success');
-        console.log(`Postes BT cargados: ${data.features.length}`);
+        showNotification(`${capaPostesBT.getLayers().length} postes BT cargados para el transformador ${codigoSED}`, 'success');
+        console.log(`Postes BT cargados: ${capaPostesBT.getLayers().length}`);
 
       } catch (error) {
         console.error('Error al cargar postes BT:', error);
@@ -975,10 +1052,10 @@
       showLoadingMessage('Cargando circuitos de BT...');
       
       try {
-        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/25/query';
+        const url = arcgisQueryUrl(25);
         const params = new URLSearchParams({
           f: 'json',
-          where: `SAL_COD_SED = '${codigoSED}'`,
+          where: whereEquals('SAL_COD_SED', codigoSED),
           outFields: '*',
           returnGeometry: true,
           outSR: 4326,
@@ -998,17 +1075,20 @@
         }
 
         capaCircuitosBT.clearLayers();
+        const features = data.features || [];
 
-        if (!data.features || data.features.length === 0) {
+        if (!features.length) {
           showNotification(`No se encontraron circuitos BT para el transformador ${codigoSED}`, 'info');
+          await cargarLineasBT(codigoSED);
           return;
         }
 
-        data.features.forEach(feature => {
-          const attrs = feature.attributes;
+        features.forEach(feature => {
+          const attrs = feature.attributes || {};
           const geom = feature.geometry;
+          const latlng = pointToLatLng(geom);
 
-          if (geom && geom.x && geom.y) {
+          if (latlng) {
             // Color según tipo de servicio
             let color = '#007bff'; // Azul por defecto
             let icon = '🔌';
@@ -1086,7 +1166,7 @@
               </div>
             `;
             
-            L.circleMarker([geom.y, geom.x], {
+            L.circleMarker(latlng, {
               radius: 7,
               fillColor: color,
               color: '#000000',
@@ -1103,8 +1183,8 @@
           }
         });
 
-        showNotification(`${data.features.length} circuitos BT cargados para el transformador ${codigoSED}`, 'success');
-        console.log(`Circuitos BT cargados: ${data.features.length}`);
+        showNotification(`${capaCircuitosBT.getLayers().length} circuitos BT cargados para el transformador ${codigoSED}`, 'success');
+        console.log(`Circuitos BT cargados: ${capaCircuitosBT.getLayers().length}`);
 
         // AQUÍ SE AGREGAN LAS LÍNEAS BT AUTOMÁTICAMENTE
         await cargarLineasBT(codigoSED);
@@ -1121,13 +1201,16 @@
     // Función para cargar líneas de Media Tensión
     async function cargarLineasMT() {
       const ubigeos = document.getElementById('inputUbigeo').value.split(',').map(u => u.trim()).filter(Boolean);
-      if (ubigeos.length === 0) return;
+      if (ubigeos.length === 0) {
+        showNotification('Ingrese al menos un ubigeo para cargar líneas MT', 'error');
+        return;
+      }
 
       showLoadingMessage('Cargando líneas de MT...');
       
       try {
-        const whereClause = ubigeos.map(u => `TMT_COD_UBI = '${u}'`).join(' OR ');
-        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/101/query';
+        const whereClause = ubigeos.map(u => whereEquals('TMT_COD_UBI', u)).join(' OR ');
+        const url = arcgisQueryUrl(101);
         const params = new URLSearchParams({
           f: 'json',
           where: `1=1 AND (${whereClause})`,
@@ -1138,15 +1221,29 @@
         });
 
         const res = await fetch(`${url}?${params}`);
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+
         const data = await res.json();
+        if (data.error) {
+          throw new Error(data.error.message || 'Error en la consulta de líneas MT');
+        }
 
         capaLineasMT.clearLayers();
+        const features = data.features || [];
 
-        data.features.forEach(feature => {
-          const attrs = feature.attributes;
+        if (!features.length) {
+          showNotification('No se encontraron líneas MT para los ubigeos ingresados', 'info');
+          return;
+        }
+
+        features.forEach(feature => {
+          const attrs = feature.attributes || {};
           const geom = feature.geometry;
+          const paths = pathsToLatLngs(geom);
 
-          if (geom && geom.paths) {
+          if (paths.length) {
             let lineStyle = {
               weight: 3,
               opacity: 0.8
@@ -1169,8 +1266,6 @@
                 lineStyle.color = '#666666';
             }
 
-            const coordinates = geom.paths[0].map(coord => [coord[1], coord[0]]);
-            
             const popupContent = `
               <div class="popup-header">
                 <i class="fas fa-bolt"></i> Línea Media Tensión
@@ -1197,13 +1292,15 @@
               </div>
             `;
 
-            L.polyline(coordinates, lineStyle)
-              .bindPopup(popupContent, { maxWidth: 400 })
-              .addTo(capaLineasMT);
+            paths.forEach(coordinates => {
+              L.polyline(coordinates, lineStyle)
+                .bindPopup(popupContent, { maxWidth: 400 })
+                .addTo(capaLineasMT);
+            });
           }
         });
 
-        console.log(`Líneas MT cargadas: ${data.features.length}`);
+        console.log(`Líneas MT cargadas: ${capaLineasMT.getLayers().length}`);
       } catch (error) {
         console.error('Error al cargar líneas MT:', error);
         showNotification('Error al cargar líneas de Media Tensión', 'error');
@@ -1216,13 +1313,16 @@
     // Función para cargar estructuras de Media Tensión
     async function cargarEstructurasMT() {
       const ubigeos = document.getElementById('inputUbigeo').value.split(',').map(u => u.trim()).filter(Boolean);
-      if (ubigeos.length === 0) return;
+      if (ubigeos.length === 0) {
+        showNotification('Ingrese al menos un ubigeo para cargar estructuras MT', 'error');
+        return;
+      }
 
       showLoadingMessage('Cargando estructuras de MT...');
       
       try {
-        const whereClause = ubigeos.map(u => `NOD_COD_UBI = '${u}'`).join(' OR ');
-        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/91/query';
+        const whereClause = ubigeos.map(u => whereEquals('NOD_COD_UBI', u)).join(' OR ');
+        const url = arcgisQueryUrl(91);
         const params = new URLSearchParams({
           f: 'json',
           where: `1=1 AND (${whereClause})`,
@@ -1233,15 +1333,29 @@
         });
 
         const res = await fetch(`${url}?${params}`);
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+
         const data = await res.json();
+        if (data.error) {
+          throw new Error(data.error.message || 'Error en la consulta de estructuras MT');
+        }
 
         capaEstructurasMT.clearLayers();
+        const features = data.features || [];
 
-        data.features.forEach(feature => {
-          const attrs = feature.attributes;
+        if (!features.length) {
+          showNotification('No se encontraron estructuras MT para los ubigeos ingresados', 'info');
+          return;
+        }
+
+        features.forEach(feature => {
+          const attrs = feature.attributes || {};
           const geom = feature.geometry;
+          const latlng = pointToLatLng(geom);
 
-          if (geom && geom.x && geom.y) {
+          if (latlng) {
             let color = '#666666';
             switch (attrs.NOD_COD_MAT_SPT) {
               case 'CO': color = '#B2B2B2'; break;
@@ -1285,7 +1399,7 @@
               </div>
             `;
 
-            L.circleMarker([geom.y, geom.x], {
+            L.circleMarker(latlng, {
               radius: 8,
               fillColor: color,
               color: '#000000',
@@ -1302,7 +1416,7 @@
           }
         });
 
-        console.log(`Estructuras MT cargadas: ${data.features.length}`);
+        console.log(`Estructuras MT cargadas: ${capaEstructurasMT.getLayers().length}`);
       } catch (error) {
         console.error('Error al cargar estructuras MT:', error);
         showNotification('Error al cargar estructuras de Media Tensión', 'error');
@@ -1323,8 +1437,8 @@
       mostrarLoading(true);
 
       try {
-        const whereClause = ubigeos.map(u => `SED_COD_UBI = '${u}'`).join(' OR ');
-        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/96/query';
+        const whereClause = ubigeos.map(u => whereEquals('SED_COD_UBI', u)).join(' OR ');
+        const url = arcgisQueryUrl(96);
         const params = new URLSearchParams({
           f: 'json',
           where: `1=1 AND (${whereClause})`,
@@ -1334,17 +1448,29 @@
           resultRecordCount: 1000
         });
         const res = await fetch(`${url}?${params}`);
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+
         const data = await res.json();
+        if (data.error) {
+          throw new Error(data.error.message || 'Error en la consulta de transformadores');
+        }
 
         capaTrafo.clearLayers();
         capaCirculos.clearLayers();
+        const features = data.features || [];
 
-        data.features.forEach(f => {
-          const lat = f.geometry.y, lon = f.geometry.x;
-          const id = f.attributes.SED_COD_SED;
-          const nombre = f.attributes.SED_NOM_SED;
-          const potencia = f.attributes.SED_POT_NOM || 'N/A';
-          const tension = f.attributes.SED_TEN_PRI || 'N/A';
+        features.forEach(f => {
+          const attrs = f.attributes || {};
+          const latlng = pointToLatLng(f.geometry);
+          if (!latlng) return;
+
+          const [lat, lon] = latlng;
+          const id = attrs.SED_COD_SED;
+          const nombre = attrs.SED_NOM_SED || 'N/A';
+          const potencia = getValue(attrs, ['SED_POT_INST', 'SED_POT_SED', 'SED_POT_NOM']);
+          const tension = getValue(attrs, ['SED_TEN_NOM_PRI', 'SED_TEN_PRI']);
 
           const transformerIcon = L.divIcon({
             className: 'transformer-icon',
@@ -1378,12 +1504,23 @@
               <button onclick="cargarRedCompletaBT('${id}')" class="btn-popup-primary">
                 <i class="fas fa-network-wired"></i> Red Completa BT
               </button>
+              <button onclick="generarReporteMetradoTrafo('${id}')" class="btn-popup-secondary">
+                <i class="fas fa-file-excel"></i> Reporte Excel
+              </button>
+              <button onclick="generarReporteDXF('${id}')" class="btn-popup-info">
+                <i class="fas fa-file-code"></i> Reporte DXF
+              </button>
             </div>
           `;
 
           L.marker([lat, lon], { icon: transformerIcon })
             .addTo(capaTrafo)
-            .bindPopup(popupContent, { maxWidth: 400 });
+            .bindPopup(popupContent, { maxWidth: 400 })
+            .on('click', () => {
+              transformadorSeleccionado = id;
+              window.transformadorSeleccionado = id;
+              document.getElementById('inputID').value = id;
+            });
 
           // Agregar círculo si está activado
           if (document.getElementById('toggleCirculos').checked) {
@@ -1398,15 +1535,15 @@
           }
         });
 
-        if (data.features.length > 0) {
-          map.fitBounds(capaTrafo.getBounds().pad(0.1));
-          showNotification(`${data.features.length} transformadores cargados exitosamente`, 'success');
+        if (capaTrafo.getLayers().length > 0) {
+          fitToLayers(capaTrafo, 0.1);
+          showNotification(`${capaTrafo.getLayers().length} transformadores cargados exitosamente`, 'success');
         } else {
           showNotification('No se encontraron transformadores para los ubigeos especificados', 'info');
         }
 
         // Cargar también líneas y estructuras MT si hay ubigeos
-        await Promise.all([
+        await Promise.allSettled([
           cargarLineasMT(),
           cargarEstructurasMT()
         ]);
@@ -1429,6 +1566,7 @@
 
       document.getElementById('inputID').value = codigoSED;
       transformadorSeleccionado = codigoSED;
+      window.transformadorSeleccionado = codigoSED;
       
       showNotification(`Cargando red completa BT del transformador ${codigoSED}...`, 'info', 6000);
       
@@ -1451,8 +1589,7 @@
         ];
         
         if (allLayers.length > 0) {
-          const group = new L.FeatureGroup(allLayers);
-          map.fitBounds(group.getBounds().pad(0.1));
+          fitToLayers(allLayers, 0.1);
         }
 
       } catch (error) {
@@ -1463,16 +1600,24 @@
 
     // Función para mostrar suministros (corregida)
     async function mostrarSuministros(id) {
+      if (!id) {
+        showNotification('Código SED no válido para cargar suministros', 'error');
+        return;
+      }
+
       showLoadingMessage('Cargando suministros...');
       
       try {
         capaSuministros.clearLayers();
         suministrosFiltrados = [];
+        transformadorSeleccionado = id;
+        window.transformadorSeleccionado = id;
+        document.getElementById('inputID').value = id;
 
-        const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/24/query';
+        const url = arcgisQueryUrl(24);
         const params = new URLSearchParams({
           f: 'json',
-          where: `SUM_COD_SED='${id}'`,
+          where: whereEquals('SUM_COD_SED', id),
           outFields: '*',
           returnGeometry: true,
           outSR: 4326,
@@ -1490,15 +1635,19 @@
         if (data.error) {
           throw new Error(data.error.message || 'Error en la consulta');
         }
+        const features = data.features || [];
 
-        if (!data.features || data.features.length === 0) {
+        if (!features.length) {
           showNotification(`No se encontraron suministros para el transformador ${id}`, 'info');
           return;
         }
 
-        data.features.forEach(f => {
-          const lat = f.geometry.y, lon = f.geometry.x;
-          const a = f.attributes;
+        features.forEach(f => {
+          const latlng = pointToLatLng(f.geometry);
+          const a = f.attributes || {};
+          if (!latlng) return;
+
+          const [lat, lon] = latlng;
 
           const popupContent = `
             <div class="popup-header">
@@ -1528,11 +1677,11 @@
               <h4><i class="fas fa-info-circle"></i> Estado</h4>
               <p><strong>Estado:</strong> ${a.SUM_EST_SUM || 'N/A'}</p>
               <p><strong>VNR:</strong> ${a.SUM_VNR_EST || 'N/A'}</p>
-              <p><strong>Tipo Servicio:</strong> ${a.SUM_TIP_SRV || 'N/A'}</p>
+              <p><strong>Tipo Servicio:</strong> ${getTipoServicio(a.SUM_TIP_SRV)}</p>
             </div>
           `;
 
-          L.circleMarker([lat, lon], {
+          L.circleMarker(latlng, {
             radius: 6,
             color: '#007bff',
             fillColor: '#007bff',
@@ -1554,11 +1703,11 @@
         });
 
         if (suministrosFiltrados.length) {
-          map.fitBounds(capaSuministros.getBounds().pad(0.2));
+          fitToLayers(capaSuministros, 0.2);
         }
 
-        showNotification(`${data.features.length} suministros cargados para el transformador ${id}`, 'success');
-        console.log(`Suministros cargados: ${data.features.length}`);
+        showNotification(`${capaSuministros.getLayers().length} suministros cargados para el transformador ${id}`, 'success');
+        console.log(`Suministros cargados: ${capaSuministros.getLayers().length}`);
 
       } catch (error) {
         console.error('Error al cargar suministros:', error);
@@ -1685,6 +1834,897 @@
       return tipos[codigo] || codigo || 'N/A';
     }
 
+    // Reporte de metrado por transformador: inventario BT, cable, ferretería y aptitud referencial.
+    async function consultarArcgisReporte(layerId, where, returnGeometry = true) {
+      const features = [];
+      const pageSize = 1000;
+      let offset = 0;
+      let keepFetching = true;
+      let guard = 0;
+
+      while (keepFetching && guard < 20) {
+        const params = new URLSearchParams({
+          f: 'json',
+          where,
+          outFields: '*',
+          returnGeometry: returnGeometry ? 'true' : 'false',
+          outSR: 4326,
+          resultRecordCount: String(pageSize),
+          resultOffset: String(offset)
+        });
+
+        const res = await fetch(`${arcgisQueryUrl(layerId)}?${params}`);
+        if (!res.ok) {
+          throw new Error(`Error HTTP ${res.status} consultando capa ${layerId}`);
+        }
+
+        const data = await res.json();
+        if (data.error) {
+          throw new Error(data.error.message || `Error consultando capa ${layerId}`);
+        }
+
+        const batch = data.features || [];
+        features.push(...batch);
+
+        keepFetching = data.exceededTransferLimit === true && batch.length > 0;
+        offset += batch.length;
+        guard += 1;
+      }
+
+      return features;
+    }
+
+    function obtenerCodigoSEDReporte(codigoSED = '') {
+      return String(
+        codigoSED ||
+        transformadorSeleccionado ||
+        document.getElementById('inputID').value ||
+        ''
+      ).trim();
+    }
+
+    async function generarReporteMetradoTrafo(codigoSED = '') {
+      const codigo = obtenerCodigoSEDReporte(codigoSED);
+      if (!codigo) {
+        showNotification('Seleccione o ingrese el código de la subestación/transformador para generar el metrado', 'error');
+        return;
+      }
+
+      transformadorSeleccionado = codigo;
+      window.transformadorSeleccionado = codigo;
+      document.getElementById('inputID').value = codigo;
+      showLoadingMessage(`Generando reporte de metrado del transformador ${codigo}...`);
+
+      try {
+        const datos = await obtenerDatosReporteMetrado(codigo);
+        const workbook = construirLibroReporteMetrado(codigo, datos);
+        const fecha = new Date().toISOString().split('T')[0];
+        descargarExcelXml(workbook, `metrado_transformador_${limpiarNombreArchivo(codigo)}_${fecha}.xls`);
+        showNotification(`Reporte de metrado del transformador ${codigo} generado en Excel`, 'success', 6000);
+      } catch (error) {
+        console.error('Error al generar reporte de metrado:', error);
+        showNotification(`Error al generar reporte: ${error.message}`, 'error', 7000);
+      } finally {
+        hideLoadingMessage();
+      }
+    }
+
+    async function obtenerDatosReporteMetrado(codigoSED) {
+      const [
+        subestaciones,
+        suministros,
+        circuitosBT,
+        postesBT,
+        tramosBT
+      ] = await Promise.all([
+        consultarArcgisReporte(96, whereEquals('SED_COD_SED', codigoSED), true),
+        consultarArcgisReporte(24, whereEquals('SUM_COD_SED', codigoSED), true),
+        consultarArcgisReporte(25, whereEquals('SAL_COD_SED', codigoSED), true),
+        consultarArcgisReporte(27, whereEquals('NOD_COD_SED', codigoSED), true),
+        consultarArcgisReporte(33, whereEquals('TBT_COD_SED', codigoSED), true)
+      ]);
+
+      return {
+        subestacion: subestaciones[0]?.attributes || {},
+        suministros,
+        circuitosBT,
+        postesBT,
+        tramosBT
+      };
+    }
+
+    function construirLibroReporteMetrado(codigoSED, datos) {
+      const resumenCable = resumirCableBT(datos.tramosBT);
+      const rangoAnios = calcularRangoAniosReporte(datos);
+      const aptitudGeneral = evaluarAptitudGeneralReporte(datos);
+
+      return [
+        {
+          name: 'Resumen',
+          rows: construirFilasResumenReporte(codigoSED, datos, resumenCable, rangoAnios, aptitudGeneral)
+        },
+        {
+          name: 'Cable_por_Fase',
+          rows: construirFilasCablePorFase(resumenCable)
+        },
+        {
+          name: 'Tramos_BT',
+          rows: construirFilasTramosBT(datos.tramosBT)
+        },
+        {
+          name: 'Postes_BT',
+          rows: construirFilasPostesBT(datos.postesBT)
+        },
+        {
+          name: 'Ferreteria_Armados',
+          rows: construirFilasFerreteria(datos.postesBT)
+        },
+        {
+          name: 'Accesorios',
+          rows: construirFilasAccesorios(datos.circuitosBT, datos.postesBT)
+        },
+        {
+          name: 'Circuitos_BT',
+          rows: construirFilasCircuitosBT(datos.circuitosBT)
+        },
+        {
+          name: 'Suministros',
+          rows: construirFilasSuministros(datos.suministros)
+        },
+        {
+          name: 'Aptitud',
+          rows: construirFilasAptitud(datos)
+        },
+        {
+          name: 'Criterios',
+          rows: construirFilasCriteriosNormativos()
+        }
+      ];
+    }
+
+    function construirFilasResumenReporte(codigoSED, datos, resumenCable, rangoAnios, aptitudGeneral) {
+      const sed = datos.subestacion || {};
+      const totalPostesFisicos = sumarCantidadPostes(datos.postesBT);
+      const totalCable = resumenCable.total;
+      const mono = resumenCable.totalesPorFase['Monofásico'] || 0;
+      const bi = resumenCable.totalesPorFase['Bifásico'] || 0;
+      const tri = resumenCable.totalesPorFase['Trifásico'] || 0;
+      const noEspecificado = resumenCable.totalesPorFase['No especificado'] || 0;
+
+      return [
+        ['REPORTE DE METRADO POR TRANSFORMADOR'],
+        ['Fecha de generación', new Date().toLocaleString('es-PE')],
+        ['Código SED', codigoSED],
+        ['Nombre SED', getValue(sed, ['SED_NOM_SED', 'SED_NOM_SUB', 'SED_DES_SED'])],
+        ['Tipo SED', getValue(sed, ['SED_TIP_SED'])],
+        ['Potencia instalada (kVA)', parseMetricNumber(getValue(sed, ['SED_POT_INST', 'SED_POT_SED', 'SED_POT_NOM'], 0))],
+        ['Tensión primaria', getValue(sed, ['SED_TEN_NOM_PRI', 'SED_TEN_PRI'])],
+        ['Ubigeo', getValue(sed, ['SED_COD_UBI'])],
+        ['Sistema eléctrico', getValue(sed, ['SED_COD_SIE', 'SED_COD_SET'])],
+        [''],
+        ['RESUMEN DE INVENTARIO', 'Cantidad / Metrado'],
+        ['Suministros', datos.suministros.length],
+        ['Circuitos BT', datos.circuitosBT.length],
+        ['Postes BT registrados', datos.postesBT.length],
+        ['Soportes BT según campo cantidad', totalPostesFisicos],
+        ['Tramos BT', datos.tramosBT.length],
+        ['Cable BT total (m)', redondear(totalCable)],
+        ['Cable BT total (km)', redondear(totalCable / 1000, 3)],
+        ['Cable monofásico (m)', redondear(mono)],
+        ['Cable bifásico (m)', redondear(bi)],
+        ['Cable trifásico (m)', redondear(tri)],
+        ['Cable sin fase especificada (m)', redondear(noEspecificado)],
+        ['Año inicial del inventario', rangoAnios.min || 'N/A'],
+        ['Año final del inventario', rangoAnios.max || 'N/A'],
+        ['Situación general', aptitudGeneral.estado],
+        ['Observación general', aptitudGeneral.observacion],
+        [''],
+        ['Nota', 'La aptitud es referencial y se calcula con datos GIS disponibles. Debe validarse con inspección de campo y expediente técnico vigente.']
+      ];
+    }
+
+    function resumirCableBT(tramosBT) {
+      const grupos = new Map();
+      const totalesPorFase = {
+        'Monofásico': 0,
+        'Bifásico': 0,
+        'Trifásico': 0,
+        'No especificado': 0
+      };
+      let total = 0;
+
+      tramosBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const fase = clasificarFaseBT(attrs);
+        const tipoRed = getTipoRed(getValue(attrs, ['TBT_COD_TIP_RED'], 'N/A'));
+        const materialCodigo = getValue(attrs, ['TBT_SP_MAT_CND', 'TBT_AP_MAT_CND', 'TBT_COD_MAT_COND'], 'N/A');
+        const material = getMaterialConductor(materialCodigo);
+        const seccion = getValue(attrs, ['TBT_SP_SEC_CND', 'TBT_AP_SEC_CND', 'TBT_SEC_CND'], 'N/A');
+        const conductores = getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND', 'TBT_NRO_CND'], 'N/A');
+        const longitud = calcularLongitudTramoBT(feature);
+        const key = [fase, tipoRed, material, seccion, conductores].join('|');
+
+        if (!grupos.has(key)) {
+          grupos.set(key, {
+            fase,
+            tipoRed,
+            material,
+            seccion,
+            conductores,
+            cantidad: 0,
+            longitud: 0
+          });
+        }
+
+        const grupo = grupos.get(key);
+        grupo.cantidad += 1;
+        grupo.longitud += longitud;
+        totalesPorFase[fase] = (totalesPorFase[fase] || 0) + longitud;
+        total += longitud;
+      });
+
+      return {
+        total,
+        totalesPorFase,
+        grupos: Array.from(grupos.values()).sort((a, b) => a.fase.localeCompare(b.fase) || a.material.localeCompare(b.material))
+      };
+    }
+
+    function construirFilasCablePorFase(resumenCable) {
+      const rows = [
+        ['Fase', 'Tipo red', 'Material', 'Sección', 'Nro conductores', 'Tramos', 'Longitud m', 'Longitud km']
+      ];
+
+      resumenCable.grupos.forEach(grupo => {
+        rows.push([
+          grupo.fase,
+          grupo.tipoRed,
+          grupo.material,
+          grupo.seccion,
+          grupo.conductores,
+          grupo.cantidad,
+          redondear(grupo.longitud),
+          redondear(grupo.longitud / 1000, 3)
+        ]);
+      });
+
+      rows.push(['TOTAL', '', '', '', '', '', redondear(resumenCable.total), redondear(resumenCable.total / 1000, 3)]);
+      return rows;
+    }
+
+    function construirFilasTramosBT(tramosBT) {
+      const rows = [
+        ['Código tramo', 'Circuito', 'Tipo servicio', 'Fase', 'Tipo red', 'Material', 'Sección', 'Nro conductores', 'Longitud m', 'Estado conservación', 'Aptitud', 'Observación', 'Puesta servicio', 'Fecha retiro']
+      ];
+
+      tramosBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const longitud = calcularLongitudTramoBT(feature);
+        const evaluacion = evaluarAptitudLineaBT(attrs, longitud);
+        const materialCodigo = getValue(attrs, ['TBT_SP_MAT_CND', 'TBT_AP_MAT_CND', 'TBT_COD_MAT_COND'], 'N/A');
+        rows.push([
+          getValue(attrs, ['TBT_COD_TBT']),
+          getValue(attrs, ['TBT_NOM_SAL', 'TBT_COD_SAL']),
+          getTipoServicio(getValue(attrs, ['TBT_TIP_SRV'], 'N/A')),
+          clasificarFaseBT(attrs),
+          getTipoRed(getValue(attrs, ['TBT_COD_TIP_RED'], 'N/A')),
+          getMaterialConductor(materialCodigo),
+          getValue(attrs, ['TBT_SP_SEC_CND', 'TBT_AP_SEC_CND', 'TBT_SEC_CND']),
+          getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND', 'TBT_NRO_CND']),
+          redondear(longitud),
+          getEstadoConservacion(getValue(attrs, ['TBT_EST_CON'], 'N/A')),
+          evaluacion.estado,
+          evaluacion.observacion,
+          formatFechaReporte(getValue(attrs, ['TBT_FEC_PTA_SRV'], '')),
+          formatFechaReporte(getValue(attrs, ['TBT_FEC_RET'], ''))
+        ]);
+      });
+
+      return rows;
+    }
+
+    function construirFilasPostesBT(postesBT) {
+      const rows = [
+        ['Código poste', 'Salida BT', 'Función', 'Material', 'Altura m', 'Tipo soporte', 'Clase', 'Esfuerzo', 'Cantidad soportes', 'Armados', 'Estado conservación', 'Aterramiento', 'Telecomunicación', 'Aptitud', 'Observación', 'Puesta servicio', 'Año']
+      ];
+
+      postesBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const evaluacion = evaluarAptitudPosteBT(attrs);
+        rows.push([
+          getValue(attrs, ['NOD_COD_NOD']),
+          getValue(attrs, ['NOD_COD_SAL', 'NOD_NOM_SAL']),
+          getFuncionEstructura(getValue(attrs, ['NOD_COD_FNC'], 'N/A')),
+          getMaterialSoporte(getValue(attrs, ['NOD_COD_MAT_SPT'], 'N/A')),
+          parseMetricNumber(getValue(attrs, ['NOD_ALT_SPT'], 0)),
+          getTipoSoporte(getValue(attrs, ['NOD_COD_TIP_SPT'], 'N/A')),
+          getValue(attrs, ['NOD_CLS_SPT']),
+          getValue(attrs, ['NOD_ESF_SPT']),
+          cantidadSoportesPoste(attrs),
+          describirArmadosPoste(attrs),
+          getEstadoConservacion(getValue(attrs, ['NOD_EST_CONS'], 'N/A')),
+          tieneBanderaSi(attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER']) ? 'Sí' : 'No',
+          tieneBanderaSi(attrs, ['NOD_FLG_TELE']) ? 'Sí' : 'No',
+          evaluacion.estado,
+          evaluacion.observacion,
+          formatFechaReporte(getValue(attrs, ['NOD_FEC_PTA_SRV'], '')),
+          obtenerAnioReporte(getValue(attrs, ['NOD_FEC_PTA_SRV'], '')) || 'N/A'
+        ]);
+      });
+
+      return rows;
+    }
+
+    function construirFilasFerreteria(postesBT) {
+      const grupos = new Map();
+
+      postesBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        [1, 2, 3, 4].forEach(numero => {
+          const sufijo = String(numero).padStart(2, '0');
+          const codigo = getValue(attrs, [`NOD_COD_TIP_ARM_${sufijo}`], '');
+          if (!codigo || codigo === 'N/A') return;
+
+          const descripcion = getValue(attrs, [`NOD_DSC_TIP_ARM_${sufijo}`], 'Sin descripción');
+          const cantidad = parseMetricNumber(getValue(attrs, [`NOD_CNT_TIP_ARM_${sufijo}`], 0)) || 1;
+          const key = `${codigo}|${descripcion}`;
+
+          if (!grupos.has(key)) {
+            grupos.set(key, {
+              codigo,
+              descripcion,
+              cantidad: 0,
+              postes: new Set()
+            });
+          }
+
+          const grupo = grupos.get(key);
+          grupo.cantidad += cantidad;
+          grupo.postes.add(getValue(attrs, ['NOD_COD_NOD'], 'N/A'));
+        });
+      });
+
+      const rows = [
+        ['Código armado/ferretería', 'Descripción', 'Cantidad total', 'Postes asociados']
+      ];
+
+      Array.from(grupos.values())
+        .sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)))
+        .forEach(grupo => {
+          rows.push([
+            grupo.codigo,
+            grupo.descripcion,
+            redondear(grupo.cantidad, 2),
+            Array.from(grupo.postes).join(', ')
+          ]);
+        });
+
+      if (rows.length === 1) {
+        rows.push(['Sin datos de armados', 'No se encontraron campos NOD_COD_TIP_ARM_01 al 04 para esta SED', 0, '']);
+      }
+
+      return rows;
+    }
+
+    function construirFilasAccesorios(circuitosBT, postesBT) {
+      const grupos = new Map();
+
+      circuitosBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const tipo = getTipoProteccion(getValue(attrs, ['SAL_EQP_TIP'], 'N/A'));
+        const marca = getValue(attrs, ['SAL_EQP_MAR'], 'N/A');
+        const modelo = getValue(attrs, ['SAL_EQP_MOD'], 'N/A');
+        const capacidad = getValue(attrs, ['SAL_CAP_AMP', 'SAL_COR_NOM'], 'N/A');
+        const estado = getEstadoConservacion(getValue(attrs, ['SAL_EQP_EST'], 'N/A'));
+        const key = [tipo, marca, modelo, capacidad, estado].join('|');
+
+        if (!grupos.has(key)) {
+          grupos.set(key, {
+            categoria: 'Protección salida BT',
+            tipo,
+            marca,
+            modelo,
+            capacidad,
+            estado,
+            cantidad: 0,
+            codigos: []
+          });
+        }
+
+        const grupo = grupos.get(key);
+        grupo.cantidad += 1;
+        grupo.codigos.push(getValue(attrs, ['SAL_COD_SAL'], 'N/A'));
+      });
+
+      const rows = [
+        ['Categoría', 'Tipo accesorio/equipo', 'Marca', 'Modelo', 'Capacidad', 'Estado', 'Cantidad', 'Códigos asociados']
+      ];
+
+      Array.from(grupos.values()).forEach(grupo => {
+        rows.push([
+          grupo.categoria,
+          grupo.tipo,
+          grupo.marca,
+          grupo.modelo,
+          grupo.capacidad,
+          grupo.estado,
+          grupo.cantidad,
+          grupo.codigos.join(', ')
+        ]);
+      });
+
+      const postesConAterramiento = postesBT.filter(feature => tieneBanderaSi(feature.attributes || {}, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER'])).length;
+      const postesConTelecom = postesBT.filter(feature => tieneBanderaSi(feature.attributes || {}, ['NOD_FLG_TELE'])).length;
+      rows.push(['Poste BT', 'Aterramiento', '', '', '', '', postesConAterramiento, 'Postes con bandera de aterramiento']);
+      rows.push(['Poste BT', 'Uso telecomunicación', '', '', '', '', postesConTelecom, 'Postes con bandera de telecomunicación']);
+
+      return rows;
+    }
+
+    function construirFilasCircuitosBT(circuitosBT) {
+      const rows = [
+        ['Código salida', 'Nombre', 'Tipo servicio', 'Tensión nominal', 'Corriente nominal', 'Capacidad', 'Fase', 'Equipo protección', 'Marca', 'Modelo', 'Estado equipo', 'Aptitud', 'Observación', 'Puesta servicio', 'Fecha retiro']
+      ];
+
+      circuitosBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const evaluacion = evaluarAptitudCircuitoBT(attrs);
+        rows.push([
+          getValue(attrs, ['SAL_COD_SAL']),
+          getValue(attrs, ['SAL_NOM_SAL']),
+          getTipoServicio(getValue(attrs, ['SAL_TIP_SRV'], 'N/A')),
+          getValue(attrs, ['SAL_TEN_NOM']),
+          getValue(attrs, ['SAL_COR_NOM']),
+          getValue(attrs, ['SAL_CAP_AMP']),
+          getValue(attrs, ['SAL_COD_FAS', 'SAL_SP_COD_FAS', 'SAL_AP_COD_FAS']),
+          getTipoProteccion(getValue(attrs, ['SAL_EQP_TIP'], 'N/A')),
+          getValue(attrs, ['SAL_EQP_MAR']),
+          getValue(attrs, ['SAL_EQP_MOD']),
+          getEstadoConservacion(getValue(attrs, ['SAL_EQP_EST'], 'N/A')),
+          evaluacion.estado,
+          evaluacion.observacion,
+          formatFechaReporte(getValue(attrs, ['SAL_FEC_PTA_SRV'], '')),
+          formatFechaReporte(getValue(attrs, ['SAL_FEC_RET'], ''))
+        ]);
+      });
+
+      return rows;
+    }
+
+    function construirFilasSuministros(suministros) {
+      const rows = [
+        ['Código suministro', 'Nombre', 'Dirección', 'Tipo servicio', 'Tarifa', 'Tensión', 'Fases medidor', 'Máx demanda kW', 'Potencia equiv kVA', 'Estado', 'VNR', 'Aptitud', 'Observación']
+      ];
+
+      suministros.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const evaluacion = evaluarAptitudSuministro(attrs);
+        rows.push([
+          getValue(attrs, ['SUM_COD_SUM']),
+          getValue(attrs, ['SUM_NOM_SUM']),
+          getValue(attrs, ['SUM_DIR_SUM']),
+          getTipoServicio(getValue(attrs, ['SUM_TIP_SRV'], 'N/A')),
+          getValue(attrs, ['SUM_TAR_SUM']),
+          getValue(attrs, ['SUM_TEN_SUM']),
+          getValue(attrs, ['SUM_MED_FAS']),
+          parseMetricNumber(getValue(attrs, ['SUM_MAX_DEM'], 0)),
+          parseMetricNumber(getValue(attrs, ['SUM_POT_EQT'], 0)),
+          getValue(attrs, ['SUM_EST_SUM']),
+          getValue(attrs, ['SUM_VNR_EST']),
+          evaluacion.estado,
+          evaluacion.observacion
+        ]);
+      });
+
+      return rows;
+    }
+
+    function construirFilasAptitud(datos) {
+      const rows = [
+        ['Tipo elemento', 'Código', 'Situación', 'Observación', 'Estado conservación', 'Estado VNR', 'Habilitado', 'Fecha retiro']
+      ];
+
+      datos.tramosBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const evaluacion = evaluarAptitudLineaBT(attrs, calcularLongitudTramoBT(feature));
+        rows.push(['Tramo BT', getValue(attrs, ['TBT_COD_TBT']), evaluacion.estado, evaluacion.observacion, getEstadoConservacion(getValue(attrs, ['TBT_EST_CON'], 'N/A')), getValue(attrs, ['TBT_VNR_EST']), valorHabilitado(attrs), formatFechaReporte(getValue(attrs, ['TBT_FEC_RET'], ''))]);
+      });
+
+      datos.postesBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const evaluacion = evaluarAptitudPosteBT(attrs);
+        rows.push(['Poste BT', getValue(attrs, ['NOD_COD_NOD']), evaluacion.estado, evaluacion.observacion, getEstadoConservacion(getValue(attrs, ['NOD_EST_CONS'], 'N/A')), getValue(attrs, ['NOD_VNR_EST']), valorHabilitado(attrs), formatFechaReporte(getValue(attrs, ['NOD_FEC_RET'], ''))]);
+      });
+
+      datos.circuitosBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const evaluacion = evaluarAptitudCircuitoBT(attrs);
+        rows.push(['Circuito BT', getValue(attrs, ['SAL_COD_SAL']), evaluacion.estado, evaluacion.observacion, getEstadoConservacion(getValue(attrs, ['SAL_EQP_EST'], 'N/A')), getValue(attrs, ['SAL_VNR_EST']), valorHabilitado(attrs), formatFechaReporte(getValue(attrs, ['SAL_FEC_RET'], ''))]);
+      });
+
+      datos.suministros.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const evaluacion = evaluarAptitudSuministro(attrs);
+        rows.push(['Suministro', getValue(attrs, ['SUM_COD_SUM']), evaluacion.estado, evaluacion.observacion, getValue(attrs, ['SUM_EST_SUM']), getValue(attrs, ['SUM_VNR_EST']), valorHabilitado(attrs), 'N/A']);
+      });
+
+      return rows;
+    }
+
+    function construirFilasCriteriosNormativos() {
+      return [
+        ['Criterio', 'Aplicación en el reporte'],
+        ['Base peruana de referencia', 'Código Nacional de Electricidad - Suministro 2011, aprobado por R.M. N.° 0214-2011-MEM, normas DGE/MINEM y criterios de supervisión OSINERGMIN aplicables a redes de distribución.'],
+        ['Alcance', 'La hoja Aptitud usa una evaluación referencial con los campos disponibles en GIS: estado de conservación, habilitación, fecha de retiro, VNR y datos técnicos mínimos.'],
+        ['Apto', 'Elemento activo, sin fecha de retiro, sin estado malo/retiro/baja y con datos técnicos mínimos disponibles.'],
+        ['No apto', 'Elemento con estado malo, retirado, baja, no habilitado, fecha de retiro o metrado crítico inválido.'],
+        ['Por verificar', 'Elemento con datos incompletos, estado regular o campos críticos que requieren inspección de campo.'],
+        ['Responsabilidad técnica', 'La conformidad normativa final debe validarse con inspección, expediente técnico, distancias de seguridad y firma del profesional responsable.']
+      ];
+    }
+
+    function evaluarAptitudGeneralReporte(datos) {
+      const evaluaciones = [];
+
+      datos.tramosBT.forEach(feature => evaluaciones.push(evaluarAptitudLineaBT(feature.attributes || {}, calcularLongitudTramoBT(feature))));
+      datos.postesBT.forEach(feature => evaluaciones.push(evaluarAptitudPosteBT(feature.attributes || {})));
+      datos.circuitosBT.forEach(feature => evaluaciones.push(evaluarAptitudCircuitoBT(feature.attributes || {})));
+      datos.suministros.forEach(feature => evaluaciones.push(evaluarAptitudSuministro(feature.attributes || {})));
+
+      const noAptos = evaluaciones.filter(e => e.estado === 'No apto').length;
+      const porVerificar = evaluaciones.filter(e => e.estado === 'Por verificar').length;
+
+      if (!evaluaciones.length) {
+        return {
+          estado: 'Por verificar',
+          observacion: 'No se encontraron elementos BT asociados a la SED consultada.'
+        };
+      }
+
+      if (noAptos > 0) {
+        return {
+          estado: 'No apto referencial',
+          observacion: `${noAptos} elemento(s) con condición no apta y ${porVerificar} por verificar. Revisar hoja Aptitud.`
+        };
+      }
+
+      if (porVerificar > 0) {
+        return {
+          estado: 'Apto con observaciones',
+          observacion: `${porVerificar} elemento(s) requieren verificación de campo o completar datos.`
+        };
+      }
+
+      return {
+        estado: 'Apto referencial',
+        observacion: 'No se detectaron alertas con los campos GIS disponibles.'
+      };
+    }
+
+    function evaluarAptitudLineaBT(attrs, longitud) {
+      const base = evaluarAptitudBase(attrs, {
+        estadoFields: ['TBT_EST_CON'],
+        vnrFields: ['TBT_VNR_EST'],
+        retiroFields: ['TBT_FEC_RET']
+      });
+
+      if (longitud <= 0) base.noApto.push('longitud no registrada');
+      if (getValue(attrs, ['TBT_SP_MAT_CND', 'TBT_AP_MAT_CND', 'TBT_COD_MAT_COND'], '') === '') base.verificar.push('material de conductor no registrado');
+      if (getValue(attrs, ['TBT_SP_SEC_CND', 'TBT_AP_SEC_CND', 'TBT_SEC_CND'], '') === '') base.verificar.push('sección de conductor no registrada');
+      if (clasificarFaseBT(attrs) === 'No especificado') base.verificar.push('fase no especificada');
+
+      return resultadoAptitud(base);
+    }
+
+    function evaluarAptitudPosteBT(attrs) {
+      const base = evaluarAptitudBase(attrs, {
+        estadoFields: ['NOD_EST_CONS'],
+        vnrFields: ['NOD_VNR_EST'],
+        retiroFields: ['NOD_FEC_RET']
+      });
+
+      if (getValue(attrs, ['NOD_COD_MAT_SPT'], '') === '') base.verificar.push('material de soporte no registrado');
+      if (parseMetricNumber(getValue(attrs, ['NOD_ALT_SPT'], 0)) <= 0) base.verificar.push('altura de soporte no registrada');
+      if (getValue(attrs, ['NOD_COD_TIP_ARM_01'], '') === '') base.verificar.push('armado/ferretería principal no registrado');
+
+      return resultadoAptitud(base);
+    }
+
+    function evaluarAptitudCircuitoBT(attrs) {
+      const base = evaluarAptitudBase(attrs, {
+        estadoFields: ['SAL_EQP_EST'],
+        vnrFields: ['SAL_VNR_EST'],
+        retiroFields: ['SAL_FEC_RET']
+      });
+
+      if (getValue(attrs, ['SAL_EQP_TIP'], '') === '') base.verificar.push('tipo de protección no registrado');
+      if (getValue(attrs, ['SAL_TEN_NOM', 'SAL_SP_TEN_FF', 'SAL_SP_TEN_FN'], '') === '') base.verificar.push('tensión no registrada');
+
+      return resultadoAptitud(base);
+    }
+
+    function evaluarAptitudSuministro(attrs) {
+      const base = evaluarAptitudBase(attrs, {
+        estadoFields: ['SUM_EST_SUM'],
+        vnrFields: ['SUM_VNR_EST'],
+        retiroFields: []
+      });
+
+      if (getValue(attrs, ['SUM_TEN_SUM'], '') === '') base.verificar.push('tensión de suministro no registrada');
+      if (getValue(attrs, ['SUM_MED_FAS'], '') === '') base.verificar.push('fase de medidor no registrada');
+
+      return resultadoAptitud(base);
+    }
+
+    function evaluarAptitudBase(attrs, config) {
+      const noApto = [];
+      const verificar = [];
+      const estado = normalizarTexto(getValue(attrs, config.estadoFields, ''));
+      const estadoDescripcion = normalizarTexto(getEstadoConservacion(estado));
+      const vnr = normalizarTexto(getValue(attrs, config.vnrFields, ''));
+      const retiro = config.retiroFields?.length ? getValue(attrs, config.retiroFields, '') : '';
+
+      if (estado && /(MALO|RETIR|BAJA|INACT|INOPER|NO APTO)/.test(estadoDescripcion)) {
+        noApto.push(`estado ${estadoDescripcion}`);
+      }
+
+      if (estado && /REGULAR/.test(estadoDescripcion)) {
+        verificar.push(`estado ${estadoDescripcion}`);
+      }
+
+      if (vnr && /(RETIR|BAJA|INACT|MALO|NO)/.test(vnr)) {
+        noApto.push(`VNR ${vnr}`);
+      }
+
+      if (tieneFechaReporte(retiro)) {
+        noApto.push('con fecha de retiro');
+      }
+
+      if (attrs.Enabled === 0 || attrs.Enabled === '0' || attrs.Enabled === false) {
+        noApto.push('no habilitado en GIS');
+      }
+
+      return { noApto, verificar };
+    }
+
+    function resultadoAptitud(base) {
+      const observaciones = [...base.noApto, ...base.verificar];
+
+      if (base.noApto.length) {
+        return {
+          estado: 'No apto',
+          observacion: observaciones.join('; ')
+        };
+      }
+
+      if (base.verificar.length) {
+        return {
+          estado: 'Por verificar',
+          observacion: observaciones.join('; ')
+        };
+      }
+
+      return {
+        estado: 'Apto',
+        observacion: 'Sin alertas con datos GIS disponibles'
+      };
+    }
+
+    function clasificarFaseBT(attrs) {
+      const fase = normalizarTexto(getValue(attrs, ['TBT_COD_TEC_FAS', 'TBT_SP_COD_FAS', 'TBT_AP_COD_FAS', 'TBT_COD_FAS'], ''));
+      if (/TRI|3F|ABC|RST|R-S-T|R S T|3/.test(fase)) return 'Trifásico';
+      if (/BI|2F|AB|AC|BC|RS|RT|ST|R-S|R-T|S-T|2/.test(fase)) return 'Bifásico';
+      if (/MONO|1F|^[ABC]$|^[RST]$|1/.test(fase)) return 'Monofásico';
+
+      const conductores = parseMetricNumber(getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND', 'TBT_NRO_CND'], 0));
+      if (conductores >= 4) return 'Trifásico';
+      if (conductores === 3) return 'Bifásico';
+      if (conductores > 0) return 'Monofásico';
+
+      return 'No especificado';
+    }
+
+    function calcularLongitudTramoBT(feature) {
+      const attrs = feature.attributes || {};
+      const longitudAtributo = parseMetricNumber(getValue(attrs, ['TBT_LONG', 'TBT_LNG_REAL', 'SHAPE.STLength()'], 0));
+      if (longitudAtributo > 0) return longitudAtributo;
+
+      const paths = pathsToLatLngs(feature.geometry);
+      return paths.reduce((total, path) => {
+        let subtotal = 0;
+        for (let i = 1; i < path.length; i++) {
+          subtotal += distanciaMetros(path[i - 1], path[i]);
+        }
+        return total + subtotal;
+      }, 0);
+    }
+
+    function distanciaMetros(a, b) {
+      const radioTierra = 6371000;
+      const lat1 = a[0] * Math.PI / 180;
+      const lat2 = b[0] * Math.PI / 180;
+      const deltaLat = (b[0] - a[0]) * Math.PI / 180;
+      const deltaLon = (b[1] - a[1]) * Math.PI / 180;
+      const h = Math.sin(deltaLat / 2) ** 2 +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+      return 2 * radioTierra * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+    }
+
+    function sumarCantidadPostes(postesBT) {
+      return postesBT.reduce((total, feature) => total + cantidadSoportesPoste(feature.attributes || {}), 0);
+    }
+
+    function cantidadSoportesPoste(attrs) {
+      const cantidad = parseMetricNumber(getValue(attrs, ['NOD_CNT_SPT'], 0));
+      return cantidad > 0 ? cantidad : 1;
+    }
+
+    function describirArmadosPoste(attrs) {
+      const armados = [];
+      [1, 2, 3, 4].forEach(numero => {
+        const sufijo = String(numero).padStart(2, '0');
+        const codigo = getValue(attrs, [`NOD_COD_TIP_ARM_${sufijo}`], '');
+        if (!codigo || codigo === 'N/A') return;
+        const cantidad = getValue(attrs, [`NOD_CNT_TIP_ARM_${sufijo}`], 1);
+        const descripcion = getValue(attrs, [`NOD_DSC_TIP_ARM_${sufijo}`], '');
+        armados.push(`${codigo} (${cantidad})${descripcion && descripcion !== 'N/A' ? ` - ${descripcion}` : ''}`);
+      });
+      return armados.length ? armados.join('; ') : 'N/A';
+    }
+
+    function calcularRangoAniosReporte(datos) {
+      const years = [];
+      const recolectar = (features, fields) => {
+        features.forEach(feature => {
+          const attrs = feature.attributes || {};
+          fields.forEach(field => {
+            const year = obtenerAnioReporte(attrs[field]);
+            if (year) years.push(year);
+          });
+        });
+      };
+
+      if (datos.subestacion) {
+        ['SED_FEC_PTA_SRV', 'SED_FEC_CREA', 'SED_FEC_ACT'].forEach(field => {
+          const year = obtenerAnioReporte(datos.subestacion[field]);
+          if (year) years.push(year);
+        });
+      }
+
+      recolectar(datos.suministros, ['SUM_FEC_CREA', 'SUM_FEC_ACT']);
+      recolectar(datos.circuitosBT, ['SAL_FEC_PTA_SRV', 'SAL_FEC_CREA', 'SAL_FEC_ACT']);
+      recolectar(datos.postesBT, ['NOD_FEC_PTA_SRV', 'NOD_FEC_CREA', 'NOD_FEC_ACT']);
+      recolectar(datos.tramosBT, ['TBT_FEC_PTA_SRV', 'TBT_FEC_CREA', 'TBT_FEC_ACT']);
+
+      return {
+        min: years.length ? Math.min(...years) : null,
+        max: years.length ? Math.max(...years) : null
+      };
+    }
+
+    function tieneFechaReporte(value) {
+      if (value === undefined || value === null || value === '' || value === 0 || value === '0' || value === 'N/A') return false;
+      const date = new Date(value);
+      return !Number.isNaN(date.getTime()) && date.getFullYear() > 1970;
+    }
+
+    function obtenerAnioReporte(value) {
+      if (!tieneFechaReporte(value)) return null;
+      const date = new Date(value);
+      const year = date.getFullYear();
+      return year >= 1970 && year <= 2100 ? year : null;
+    }
+
+    function formatFechaReporte(value) {
+      if (!tieneFechaReporte(value)) return 'N/A';
+      return new Date(value).toLocaleDateString('es-PE');
+    }
+
+    function parseMetricNumber(value) {
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (value === undefined || value === null || value === '' || value === 'N/A') return 0;
+      let text = String(value).trim();
+      if (text.includes(',') && !text.includes('.')) {
+        text = text.replace(',', '.');
+      }
+      text = text.replace(/,/g, '').replace(/[^\d.-]/g, '');
+      const parsed = parseFloat(text);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function redondear(value, decimals = 2) {
+      const factor = 10 ** decimals;
+      return Math.round((Number(value) || 0) * factor) / factor;
+    }
+
+    function normalizarTexto(value) {
+      return String(value || '')
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase();
+    }
+
+    function tieneBanderaSi(attrs, fields) {
+      return fields.some(field => normalizarTexto(attrs[field]) === 'S' || normalizarTexto(attrs[field]) === 'SI');
+    }
+
+    function valorHabilitado(attrs) {
+      if (attrs.Enabled === undefined || attrs.Enabled === null || attrs.Enabled === '') return 'N/A';
+      return attrs.Enabled === 1 || attrs.Enabled === '1' || attrs.Enabled === true ? 'Sí' : 'No';
+    }
+
+    function descargarExcelXml(workbook, filename) {
+      const xml = construirExcelXml(workbook);
+      const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function construirExcelXml(workbook) {
+      const worksheets = workbook.map(sheet => worksheetToXml(sheet.name, sheet.rows)).join('');
+      return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+ <Styles>
+  <Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#D9EAF7" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="Title"><Font ss:Color="#FFFFFF" ss:Bold="1" ss:Size="14"/><Interior ss:Color="#1F4E78" ss:Pattern="Solid"/></Style>
+ </Styles>
+ ${worksheets}
+</Workbook>`;
+    }
+
+    function worksheetToXml(name, rows) {
+      const safeName = sanitizarNombreHoja(name);
+      const tableRows = rows.map((row, index) => {
+        const style = index === 0 ? (String(row[0] || '').startsWith('REPORTE') ? 'Title' : 'Header') : '';
+        return rowToXml(Array.isArray(row) ? row : [row], style);
+      }).join('');
+      return `<Worksheet ss:Name="${escapeXml(safeName)}"><Table>${tableRows}</Table></Worksheet>`;
+    }
+
+    function rowToXml(row, style) {
+      const cells = row.map(value => cellToXml(value, style)).join('');
+      return `<Row>${cells}</Row>`;
+    }
+
+    function cellToXml(value, style) {
+      const isNumber = typeof value === 'number' && Number.isFinite(value);
+      const type = isNumber ? 'Number' : 'String';
+      const styleAttr = style ? ` ss:StyleID="${style}"` : '';
+      const safeValue = isNumber ? String(value) : escapeXml(value ?? '');
+      return `<Cell${styleAttr}><Data ss:Type="${type}">${safeValue}</Data></Cell>`;
+    }
+
+    function sanitizarNombreHoja(name) {
+      return String(name || 'Hoja')
+        .replace(/[\\/?*:[\]]/g, '_')
+        .substring(0, 31) || 'Hoja';
+    }
+
+    function limpiarNombreArchivo(value) {
+      return String(value || 'SED').replace(/[\\/:*?"<>|]/g, '_');
+    }
+
+    function escapeXml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    }
+
     // Funciones existentes mejoradas
     function buscarID() {
       const id = document.getElementById('inputID').value.trim();
@@ -1703,7 +2743,7 @@
       
       const encabezado = Object.keys(suministrosFiltrados[0]).join(',');
       const filas = suministrosFiltrados.map(obj => 
-        Object.values(obj).map(v => `"${v}"`).join(',')
+        Object.values(obj).map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
       ).join('\n');
       const csv = `${encabezado}\n${filas}`;
       
@@ -1765,7 +2805,7 @@
           });
 
           if (capaExcel.getLayers().length) {
-            map.fitBounds(capaExcel.getBounds().pad(0.1));
+            fitToLayers(capaExcel, 0.1);
             showNotification(`${capaExcel.getLayers().length} puntos proyectados cargados`, 'success');
           } else {
             showNotification('No se pudieron cargar puntos del archivo CSV', 'error');
@@ -1818,6 +2858,7 @@
         
         suministrosFiltrados = [];
         transformadorSeleccionado = null;
+        window.transformadorSeleccionado = null;
         
         document.getElementById('inputUbigeo').value = '';
         document.getElementById('inputID').value = '';
@@ -2039,5 +3080,6 @@
     actualizarEstadisticas();
     showNotification('Sistema de red eléctrica listo. Ingrese ubigeos o un ID de transformador para comenzar.', 'info', 5000);
   </script>
+  <script src="reportedxf.js"></script>
 </body>
 </html>

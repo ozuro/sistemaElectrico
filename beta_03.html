@@ -166,11 +166,11 @@
     });
 
     // Capas
-    let capaTrafo = L.layerGroup().addTo(map);
-    let capaSuministros = L.layerGroup().addTo(map);
-    let capaExcel = L.layerGroup().addTo(map);
-    let capaCirculos = L.layerGroup().addTo(map);
-    let capaStreetView = L.layerGroup().addTo(map);
+    let capaTrafo = L.featureGroup().addTo(map);
+    let capaSuministros = L.featureGroup().addTo(map);
+    let capaExcel = L.featureGroup().addTo(map);
+    let capaCirculos = L.featureGroup().addTo(map);
+    let capaStreetView = L.featureGroup().addTo(map);
     let suministrosFiltrados = [];
 
     // Agregar control de capas
@@ -622,7 +622,7 @@
       if (ubigeos.length === 0) return alert('Ingrese al menos un ubigeo');
 
       const whereClause = ubigeos.map(u => `SED_COD_UBI = '${u}'`).join(' OR ');
-      const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/96/query';
+      const url = 'https://gis.electropuno.com.pe/arcgis_server/rest/services/RedElectroPuno/MapServer/96/query';
       const params = new URLSearchParams({
         f: 'json',
         where: `1=1 AND (${whereClause})`,
@@ -681,7 +681,7 @@
       capaSuministros.clearLayers();
       suministrosFiltrados = [];
 
-      const url = 'https://arcgis.electropuno.com.pe/arcgis/rest/services/RedElectroPuno/MapServer/24/query';
+      const url = 'https://gis.electropuno.com.pe/arcgis_server/rest/services/RedElectroPuno/MapServer/24/query';
       const params = new URLSearchParams({
         f: 'json',
         where: `SUM_COD_SED='${id}'`,

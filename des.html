@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extractor de Datos RedElectroPuno</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+    <style>
+        .loading {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 min-h-screen">
+    <script>
+        // Dark mode detection
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark');
+        }
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => {
+            if (event.matches) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+        });
+    </script>
+
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-8">
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+                Extractor de Datos RedElectroPuno
+            </h1>
+            <p class="text-gray-600 dark:text-gray-400">
+                Extrae información de las capas eléctricas filtrada por ubigeos específicos
+            </p>
+        </div>
+
+        <!-- Controls -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Ubigeos Filter -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Ubigeos a consultar
+                    </label>
+                    <textarea id="ubigeosInput" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white text-base"
+                              rows="3" placeholder="210107,210105,210108,210605,211104">210107,210105,210108,210605,211104</textarea>
+                </div>
+
+                <!-- Layer Selection -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Capas a consultar
+                    </label>
+                    <div class="space-y-2 max-h-32 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-md p-2 dark:bg-gray-700">
+                        <label class="flex items-center">
+                            <input type="checkbox" value="24" class="layer-checkbox mr-2" checked>
+                            <span class="text-sm dark:text-gray-300">Suministros (24)</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" value="27" class="layer-checkbox mr-2" checked>
+                            <span class="text-sm dark:text-gray-300">Estructura BT - Postes (27)</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" value="96" class="layer-checkbox mr-2" checked>
+                            <span class="text-sm dark:text-gray-300">Subestaciones (96)</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" value="33" class="layer-checkbox mr-2">
+                            <span class="text-sm dark:text-gray-300">Tramos BT (33)</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" value="91" class="layer-checkbox mr-2">
+                            <span class="text-sm dark:text-gray-300">Estructura MT (91)</span>
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" value="101" class="layer-checkbox mr-2">
+                            <span class="text-sm dark:text-gray-300">Tramos MT (101)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex flex-col justify-end space-y-3">
+                    <button id="extractBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition duration-200 flex items-center justify-center">
+                        <span id="extractBtnText">Extraer Datos</span>
+                        <div id="extractLoader" class="loading ml-2 hidden"></div>
+                    </button>
+                    <button id="exportBtn" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        Exportar a Excel
+                    </button>
+                    <button id="clearBtn" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition duration-200">
+                        Limpiar Datos
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress -->
+        <div id="progressContainer" class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-8 hidden">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Progreso de Extracción</h3>
+            <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                    <span class="text-sm text-gray-600 dark:text-gray-400" id="progressText">Preparando consulta...</span>
+                    <span class="text-sm font-medium text-gray-900 dark:text-white" id="progressPercent">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div id="progressBar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary -->
+        <div id="summaryContainer" class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-8 hidden">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Resumen de Datos Extraídos</h3>
+            <div id="summaryContent" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <!-- Summary cards will be populated here -->
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div id="resultsContainer" class="space-y-8 hidden">
+            <!-- Tables will be populated here -->
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const baseUrl = 'https://gis.electropuno.com.pe/arcgis_server/rest/services/RedElectroPuno/MapServer';
+        
+        const layerConfig = {
+            24: { name: 'Suministros', ubiField: 'SUM_COD_UBI', keyFields: ['SUM_COD_SUM', 'SUM_NOM_SUM', 'SUM_DIR_SUM', 'SUM_COD_SED', 'SUM_MAX_DEM', 'SUM_CON_ENG'] },
+            27: { name: 'Estructura BT (Postes)', ubiField: 'NOD_COD_UBI', keyFields: ['NOD_COD_NOD', 'NOD_COD_SED', 'NOD_COD_MAT_SPT', 'NOD_ALT_SPT', 'NOD_EST_CONS', 'NOD_ESF_SPT'] },
+            96: { name: 'Subestaciones', ubiField: 'SED_COD_UBI', keyFields: ['SED_COD_SED', 'SED_NOM_SED', 'SED_TIP_SED', 'SED_POT_SED', 'SED_NRO_CLI_SP', 'SED_MAX_DEM_TOT'] },
+            33: { name: 'Tramos BT', ubiField: 'TBT_COD_UBI', keyFields: ['TBT_COD_TBT', 'TBT_COD_SED', 'TBT_COD_TIP_RED', 'TBT_LONG', 'TBT_SP_MAT_CND', 'TBT_SP_SEC_CND'] },
+            91: { name: 'Estructura MT', ubiField: 'NOD_COD_UBI', keyFields: ['NOD_COD_NOD', 'NOD_COD_SET', 'NOD_COD_MAT_SPT', 'NOD_ALT_SPT', 'NOD_EST_CONS', 'NOD_ESF_SPT'] },
+            101: { name: 'Tramos MT', ubiField: 'TMT_COD_UBI', keyFields: ['TMT_COD_TMT', 'TMT_COD_SET', 'TMT_VAL_TEN_NOM', 'TMT_LNG_REAL', 'TMT_COD_MAT_COND', 'TMT_SEC_COND'] }
+        };
+
+        let extractedData = {};
+
+        // DOM elements
+        const extractBtn = document.getElementById('extractBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const ubigeosInput = document.getElementById('ubigeosInput');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const progressPercent = document.getElementById('progressPercent');
+        const summaryContainer = document.getElementById('summaryContainer');
+        const summaryContent = document.getElementById('summaryContent');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const extractBtnText = document.getElementById('extractBtnText');
+        const extractLoader = document.getElementById('extractLoader');
+
+        // Event listeners
+        extractBtn.addEventListener('click', extractData);
+        exportBtn.addEventListener('click', exportToExcel);
+        clearBtn.addEventListener('click', clearData);
+
+        async function extractData() {
+            const ubigeos = ubigeosInput.value.split(',').map(u => u.trim()).filter(u => u);
+            const selectedLayers = Array.from(document.querySelectorAll('.layer-checkbox:checked')).map(cb => cb.value);
+
+            if (ubigeos.length === 0) {
+                showAlert('Por favor ingrese al menos un ubigeo');
+                return;
+            }
+
+            if (selectedLayers.length === 0) {
+                showAlert('Por favor seleccione al menos una capa');
+                return;
+            }
+
+            // Reset UI
+            extractedData = {};
+            setLoading(true);
+            showProgress(true);
+            updateProgress(0, 'Iniciando extracción...');
+
+            try {
+                const totalLayers = selectedLayers.length;
+                let completedLayers = 0;
+
+                for (const layerId of selectedLayers) {
+                    const layerName = layerConfig[layerId].name;
+                    updateProgress((completedLayers / totalLayers) * 100, `Extrayendo ${layerName}...`);
+
+                    const data = await fetchLayerData(layerId, ubigeos);
+                    extractedData[layerId] = {
+                        name: layerName,
+                        data: data,
+                        config: layerConfig[layerId]
+                    };
+
+                    completedLayers++;
+                    updateProgress((completedLayers / totalLayers) * 100, `Completado ${layerName} (${data.length} registros)`);
+                }
+
+                updateProgress(100, 'Extracción completada');
+                displayResults();
+                displaySummary();
+                exportBtn.disabled = false;
+
+            } catch (error) {
+                console.error('Error durante la extracción:', error);
+                showAlert('Error durante la extracción: ' + error.message);
+            } finally {
+                setLoading(false);
+                setTimeout(() => showProgress(false), 2000);
+            }
+        }
+
+        async function fetchLayerData(layerId, ubigeos) {
+            const config = layerConfig[layerId];
+            const ubiField = config.ubiField;
+            
+            // Create WHERE clause for ubigeos
+            const whereClause = ubigeos.map(ubi => `${ubiField} LIKE '${ubi}%'`).join(' OR ');
+            
+            const params = new URLSearchParams({
+                where: whereClause,
+                outFields: '*',
+                f: 'json',
+                returnGeometry: 'false',
+                resultRecordCount: 1000
+            });
+
+            const url = `${baseUrl}/${layerId}/query?${params.toString()}`;
+            
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    throw new Error(result.error.message || 'Error en la consulta ArcGIS');
+                }
+                
+                return result.features || [];
+            } catch (error) {
+                console.error(`Error fetching layer ${layerId}:`, error);
+                throw error;
+            }
+        }
+
+        function displayResults() {
+            resultsContainer.innerHTML = '';
+            resultsContainer.classList.remove('hidden');
+
+            Object.entries(extractedData).forEach(([layerId, layerData]) => {
+                const tableContainer = createTableContainer(layerId, layerData);
+                resultsContainer.appendChild(tableContainer);
+            });
+        }
+
+        function createTableContainer(layerId, layerData) {
+            const container = document.createElement('div');
+            container.className = 'bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6';
+
+            const header = document.createElement('div');
+            header.className = 'flex justify-between items-center mb-4';
+            header.innerHTML = `
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+                    ${layerData.name} (${layerData.data.length} registros)
+                </h3>
+                <button onclick="toggleTable('${layerId}')" class="text-blue-600 hover:text-blue-800 dark:text-blue-400">
+                    <span id="toggle-${layerId}">Mostrar</span>
+                </button>
+            `;
+
+            const tableWrapper = document.createElement('div');
+            tableWrapper.id = `table-${layerId}`;
+            tableWrapper.className = 'hidden overflow-x-auto';
+
+            if (layerData.data.length > 0) {
+                const table = createTable(layerData.data, layerData.config.keyFields);
+                tableWrapper.appendChild(table);
+            } else {
+                tableWrapper.innerHTML = '<p class="text-gray-500 dark:text-gray-400">No se encontraron datos para esta capa</p>';
+            }
+
+            container.appendChild(header);
+            container.appendChild(tableWrapper);
+
+            return container;
+        }
+
+        function createTable(data, keyFields) {
+            const table = document.createElement('table');
+            table.className = 'min-w-full divide-y divide-gray-200 dark:divide-gray-700';
+
+            // Create header
+            const thead = document.createElement('thead');
+            thead.className = 'bg-gray-50 dark:bg-gray-900';
+            const headerRow = document.createElement('tr');
+
+            keyFields.forEach(field => {
+                const th = document.createElement('th');
+                th.className = 'px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider';
+                th.textContent = field;
+                headerRow.appendChild(th);
+            });
+
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            // Create body
+            const tbody = document.createElement('tbody');
+            tbody.className = 'bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700';
+
+            data.slice(0, 100).forEach((feature, index) => { // Limit to 100 rows for display
+                const row = document.createElement('tr');
+                row.className = index % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-900';
+
+                keyFields.forEach(field => {
+                    const td = document.createElement('td');
+                    td.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300';
+                    const value = feature.attributes[field];
+                    td.textContent = value || '-';
+                    row.appendChild(td);
+                });
+
+                tbody.appendChild(row);
+            });
+
+            table.appendChild(tbody);
+
+            if (data.length > 100) {
+                const notice = document.createElement('p');
+                notice.className = 'text-sm text-gray-500 dark:text-gray-400 mt-2';
+                notice.textContent = `Mostrando los primeros 100 registros de ${data.length} total`;
+                table.appendChild(notice);
+            }
+
+            return table;
+        }
+
+        function displaySummary() {
+            summaryContent.innerHTML = '';
+            summaryContainer.classList.remove('hidden');
+
+            Object.entries(extractedData).forEach(([layerId, layerData]) => {
+                const card = document.createElement('div');
+                card.className = 'bg-blue-50 dark:bg-blue-900 rounded-lg p-4';
+                card.innerHTML = `
+                    <h4 class="font-medium text-blue-900 dark:text-blue-100">${layerData.name}</h4>
+                    <p class="text-2xl font-bold text-blue-600 dark:text-blue-300">${layerData.data.length}</p>
+                    <p class="text-sm text-blue-700 dark:text-blue-400">registros</p>
+                `;
+                summaryContent.appendChild(card);
+            });
+
+            // Add total card
+            const totalRecords = Object.values(extractedData).reduce((sum, layer) => sum + layer.data.length, 0);
+            const totalCard = document.createElement('div');
+            totalCard.className = 'bg-green-50 dark:bg-green-900 rounded-lg p-4';
+            totalCard.innerHTML = `
+                <h4 class="font-medium text-green-900 dark:text-green-100">Total General</h4>
+                <p class="text-2xl font-bold text-green-600 dark:text-green-300">${totalRecords}</p>
+                <p class="text-sm text-green-700 dark:text-green-400">registros</p>
+            `;
+            summaryContent.appendChild(totalCard);
+        }
+
+        function toggleTable(layerId) {
+            const table = document.getElementById(`table-${layerId}`);
+            const toggle = document.getElementById(`toggle-${layerId}`);
+            
+            if (table.classList.contains('hidden')) {
+                table.classList.remove('hidden');
+                toggle.textContent = 'Ocultar';
+            } else {
+                table.classList.add('hidden');
+                toggle.textContent = 'Mostrar';
+            }
+        }
+
+        async function exportToExcel() {
+            try {
+                const workbook = XLSX.utils.book_new();
+
+                // Add summary sheet
+                const summaryData = [
+                    ['Capa', 'Registros'],
+                    ...Object.entries(extractedData).map(([layerId, layerData]) => [layerData.name, layerData.data.length])
+                ];
+                const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+                XLSX.utils.book_append_sheet(workbook, summarySheet, 'Resumen');
+
+                // Add data sheets
+                Object.entries(extractedData).forEach(([layerId, layerData]) => {
+                    if (layerData.data.length > 0) {
+                        const data = layerData.data.map(feature => feature.attributes);
+                        const worksheet = XLSX.utils.json_to_sheet(data);
+                        XLSX.utils.book_append_sheet(workbook, worksheet, layerData.name.substring(0, 31)); // Excel sheet name limit
+                    }
+                });
+
+                // Generate filename with timestamp
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+                const filename = `RedElectroPuno_${timestamp}.xlsx`;
+
+                // Save file
+                XLSX.writeFile(workbook, filename);
+
+                showAlert('Archivo Excel exportado exitosamente', 'success');
+            } catch (error) {
+                console.error('Error exporting to Excel:', error);
+                showAlert('Error al exportar a Excel: ' + error.message);
+            }
+        }
+
+        function clearData() {
+            extractedData = {};
+            resultsContainer.classList.add('hidden');
+            summaryContainer.classList.add('hidden');
+            progressContainer.classList.add('hidden');
+            exportBtn.disabled = true;
+            showAlert('Datos limpiados', 'success');
+        }
+
+        function setLoading(loading) {
+            extractBtn.disabled = loading;
+            if (loading) {
+                extractBtnText.textContent = 'Extrayendo...';
+                extractLoader.classList.remove('hidden');
+            } else {
+                extractBtnText.textContent = 'Extraer Datos';
+                extractLoader.classList.add('hidden');
+            }
+        }
+
+        function showProgress(show) {
+            if (show) {
+                progressContainer.classList.remove('hidden');
+            } else {
+                progressContainer.classList.add('hidden');
+            }
+        }
+
+        function updateProgress(percent, text) {
+            progressBar.style.width = `${percent}%`;
+            progressPercent.textContent = `${Math.round(percent)}%`;
+            progressText.textContent = text;
+        }
+
+        function showAlert(message, type = 'error') {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg ${
+                type === 'error' ? 'bg-red-100 border border-red-400 text-red-700' : 'bg-green-100 border border-green-400 text-green-700'
+            }`;
+            alertDiv.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <span>${message}</span>
+                    <button onclick="this.parentElement.parentElement.remove()" class="ml-4 text-lg font-bold">&times;</button>
+                </div>
+            `;
+            document.body.appendChild(alertDiv);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentElement) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+
+        // Make toggleTable available globally
+        window.toggleTable = toggleTable;
+    </script>
+</body>
+</html>
