@@ -537,12 +537,22 @@
       <button onclick="cerrar3DView()" style="margin-bottom: 15px; background: #dc3545;">
         <i class="fas fa-arrow-left"></i> Volver al Mapa
       </button>
+      <button onclick="refrescarSistema3D()" style="margin-bottom: 15px; background: #0d6efd;">
+        <i class="fas fa-sync-alt"></i> Refrescar
+      </button>
+      <div style="margin-bottom: 10px;"><i class="fas fa-sitemap"></i> Sistema: <span id="current3DSystem">sin carga</span></div>
       <div style="margin-bottom: 10px;"><i class="fas fa-mouse"></i> Arrastra para rotar</div>
       <div style="margin-bottom: 10px;"><i class="fas fa-scroll"></i> Scroll para zoom</div>
       <hr style="margin: 15px 0; border-color: #555;">
       <div><i class="fas fa-bolt"></i> Transformadores: <span id="countTransformers3D">0</span></div>
-      <div><i class="fas fa-home"></i> Postes/Suministros: <span id="countPoles3D">0</span></div>
-      <div><i class="fas fa-plus"></i> Proyectados: <span id="countExcel3D">0</span></div>
+      <div><i class="fas fa-plug"></i> Circuitos: <span id="countCircuitos3D">0</span></div>
+      <div><i class="fas fa-road"></i> Postes: <span id="countPoles3D">0</span></div>
+      <div><i class="fas fa-wave-square"></i> Vanos: <span id="countVanos3D">0</span></div>
+      <div><i class="fas fa-bolt"></i> Cables: <span id="countCables3D">0</span></div>
+      <div><i class="fas fa-screwdriver-wrench"></i> Armados: <span id="countArmados3D">0</span></div>
+      <div><i class="fas fa-anchor"></i> Retenidas: <span id="countRetenidas3D">0</span></div>
+      <div><i class="fas fa-magnet"></i> Puestas a tierra: <span id="countPat3D">0</span></div>
+      <div><i class="fas fa-home"></i> Suministros: <span id="countSupplies3D">0</span></div>
     </div>
   </div>
 
@@ -563,9 +573,20 @@
 
     // Variables globales para 3D y Street View
     let scene, camera, renderer, controls;
+    let system3DRoot = null;
     let transformadores3D = [];
     let postes3D = [];
-    let casas3D = [];
+    let circuitos3D = [];
+    let suministros3D = [];
+    let lineas3D = [];
+    let armados3D = [];
+    let retenidas3D = [];
+    let pat3D = [];
+    let vanos3D = [];
+    let elementos3D = [];
+    let sistema3DActual = null;
+    let sistema3DEnCarga = false;
+    let sistema3DCargaPromise = null;
     let streetViewActive = false;
     let streetViewMarkers = [];
 
@@ -2870,125 +2891,844 @@
       }
     }
 
-    // Funciones 3D simplificadas (mantenidas para compatibilidad)
-    function createTransformer3D(x, z, name) {
+    // Vista 3D del sistema seleccionado
+    const WORLD_SCALE_3D = 0.8;
+    const DEFAULT_POLE_HEIGHT = 8.5;
+    const DEFAULT_AERIAL_HEIGHT = 6.2;
+    const DEFAULT_SUBTER_HEIGHT = -0.35;
+
+    function getSelected3DCode() {
+      return String(transformadorSeleccionado || window.transformadorSeleccionado || document.getElementById('inputID').value || '').trim();
+    }
+
+    function dispose3DObject(object3D) {
+      if (!object3D) return;
+      object3D.traverse((node) => {
+        if (node.geometry) node.geometry.dispose();
+        if (node.material) {
+          if (Array.isArray(node.material)) {
+            node.material.forEach((material) => {
+              if (material.map) material.map.dispose();
+              material.dispose();
+            });
+          } else {
+            if (node.material.map) node.material.map.dispose();
+            node.material.dispose();
+          }
+        }
+      });
+    }
+
+    function clear3DScene() {
+      const objects = elementos3D.slice();
+      objects.forEach((object3D) => {
+        if (system3DRoot) system3DRoot.remove(object3D);
+        dispose3DObject(object3D);
+      });
+      [transformadores3D, postes3D, circuitos3D, suministros3D, lineas3D, armados3D, retenidas3D, pat3D, vanos3D, elementos3D].forEach((collection) => {
+        collection.length = 0;
+      });
+    }
+
+    function register3DObject(object3D, bucket) {
+      if (system3DRoot) system3DRoot.add(object3D);
+      elementos3D.push(object3D);
+      if (bucket) bucket.push(object3D);
+      return object3D;
+    }
+
+    function metersPerDegreeLat(lat) {
+      const latRad = lat * Math.PI / 180;
+      return 111132.92 - 559.82 * Math.cos(2 * latRad) + 1.175 * Math.cos(4 * latRad) - 0.0023 * Math.cos(6 * latRad);
+    }
+
+    function metersPerDegreeLon(lat) {
+      const latRad = lat * Math.PI / 180;
+      return 111412.84 * Math.cos(latRad) - 93.5 * Math.cos(3 * latRad) + 0.118 * Math.cos(5 * latRad);
+    }
+
+    function latLngToLocal3D(lat, lng, origin) {
+      const x = (lng - origin.lng) * metersPerDegreeLon(origin.lat) * WORLD_SCALE_3D;
+      const z = (lat - origin.lat) * metersPerDegreeLat(origin.lat) * WORLD_SCALE_3D;
+      return { x, z };
+    }
+
+    function pointToLocal3D(latlng, origin, y = 0) {
+      if (!latlng) return null;
+      const [lat, lng] = latlng;
+      const p = latLngToLocal3D(lat, lng, origin);
+      return new THREE.Vector3(p.x, y, p.z);
+    }
+
+    function createLabelSprite(lines, options = {}) {
+      const textLines = Array.isArray(lines) ? lines.map((line) => String(line)) : String(lines || '').split('\n');
+      const fontSize = options.fontSize || 18;
+      const fontFamily = options.fontFamily || 'Segoe UI, Arial, sans-serif';
+      const paddingX = options.paddingX || 10;
+      const paddingY = options.paddingY || 8;
+      const lineHeight = options.lineHeight || Math.round(fontSize * 1.25);
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+
+      context.font = `${fontSize}px ${fontFamily}`;
+      const widths = textLines.map((line) => context.measureText(line).width);
+      canvas.width = Math.max(96, Math.ceil(Math.max(...widths, 0) + paddingX * 2));
+      canvas.height = Math.max(32, Math.ceil(textLines.length * lineHeight + paddingY * 2));
+
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.font = `${fontSize}px ${fontFamily}`;
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillStyle = options.background || 'rgba(18, 26, 32, 0.72)';
+      context.strokeStyle = options.border || 'rgba(255,255,255,0.22)';
+      context.lineWidth = 2;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+      context.fillStyle = options.color || '#ffffff';
+      textLines.forEach((line, index) => {
+        const y = paddingY + fontSize * 0.7 + index * lineHeight;
+        context.fillText(line, canvas.width / 2, y);
+      });
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.needsUpdate = true;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false
+      });
+      const sprite = new THREE.Sprite(material);
+      const scale = options.scale || 1;
+      sprite.scale.set((canvas.width / 12) * scale, (canvas.height / 12) * scale, 1);
+      sprite.userData.texture = texture;
+      return sprite;
+    }
+
+    function extractArmados(attrs) {
+      const armados = [];
+      for (let i = 1; i <= 4; i += 1) {
+        const sufijo = String(i).padStart(2, '0');
+        const codigo = String(getValue(attrs, [`NOD_COD_TIP_ARM_${sufijo}`], '')).trim();
+        if (!codigo || codigo === 'N/A') continue;
+        armados.push({
+          codigo,
+          descripcion: getValue(attrs, [`NOD_DSC_TIP_ARM_${sufijo}`], ''),
+          cantidad: parseMetricNumber(getValue(attrs, [`NOD_CNT_TIP_ARM_${sufijo}`], 0)) || 1
+        });
+      }
+      return armados;
+    }
+
+    function materialColorForPole(attrs) {
+      switch (attrs?.NOD_COD_MAT_SPT) {
+        case 'CO': return 0xb5b5b5;
+        case 'FI': return 0xf7b48b;
+        case 'FG': return 0xd66b6b;
+        case 'FN': return 0x6e2a2a;
+        case 'HO': return 0x89c45d;
+        case 'MA': return 0x8b5a2b;
+        case 'RI': return 0x6d5326;
+        default: return 0x6e7682;
+      }
+    }
+
+    function nearestPoleForPoint(point, poles, maxDistance = 30) {
+      let best = null;
+      poles.forEach((pole) => {
+        const dx = pole.point.x - point.x;
+        const dz = pole.point.z - point.z;
+        const distance = Math.hypot(dx, dz);
+        if (distance > maxDistance) return;
+        if (!best || distance < best.distance) {
+          best = { ...pole, distance, dx, dz };
+        }
+      });
+      return best;
+    }
+
+    function nearestLineHeading(point, linePaths) {
+      let best = null;
+      linePaths.forEach((path) => {
+        for (let i = 1; i < path.length; i += 1) {
+          const a = path[i - 1];
+          const b = path[i];
+          const dx = b.x - a.x;
+          const dz = b.z - a.z;
+          const len2 = dx * dx + dz * dz;
+          if (len2 === 0) continue;
+          const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.z - a.z) * dz) / len2));
+          const px = a.x + dx * t;
+          const pz = a.z + dz * t;
+          const distance = Math.hypot(point.x - px, point.z - pz);
+          if (!best || distance < best.distance) {
+            best = { distance, angle: Math.atan2(dz, dx) };
+          }
+        }
+      });
+      return best?.angle ?? 0;
+    }
+
+    function createCableSpan(start, end, options = {}) {
+      const color = options.color || 0x333333;
+      const radius = options.radius || 0.045;
+      const type = options.type || 'A';
+      const material = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.7,
+        metalness: 0.15,
+        transparent: true,
+        opacity: options.opacity || 1
+      });
+      const mid = start.clone().add(end).multiplyScalar(0.5);
+      const span = start.distanceTo(end);
+      const sag = type === 'S' ? 0.08 : Math.min(1.4, Math.max(0.28, span / 45));
+      mid.y = type === 'S' ? Math.min(start.y, end.y) - 0.1 : Math.min(start.y, end.y) - sag;
+      const curve = new THREE.CatmullRomCurve3([start, mid, end]);
+      const geometry = new THREE.TubeGeometry(curve, Math.max(12, Math.round(span / 4)), radius, 6, false);
+      const cable = new THREE.Mesh(geometry, material);
+      cable.castShadow = true;
+      cable.receiveShadow = true;
+      cable.userData = { type: 'cable', spanMeters: span / WORLD_SCALE_3D };
+      return cable;
+    }
+
+    function createTransformer3D(point, attrs, codigo) {
       const group = new THREE.Group();
-      const baseGeometry = new THREE.BoxGeometry(2, 0.5, 1.5);
-      const baseMaterial = new THREE.MeshLambertMaterial({ color: 0x666666 });
-      const base = new THREE.Mesh(baseGeometry, baseMaterial);
-      base.position.y = 0.25;
+      group.position.set(point.x, 0, point.z);
+      group.userData = { type: 'transformer', name: codigo };
+
+      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x6d7278, roughness: 0.55, metalness: 0.25 });
+      const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.4, metalness: 0.1 });
+      const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.9, metalness: 0.05 });
+
+      const base = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.55, 2.8), darkMaterial);
+      base.position.y = 0.27;
       base.castShadow = true;
       group.add(base);
-      group.position.set(x, 0, z);
-      group.userData = { type: 'transformer', name: name || 'Transformador' };
+
+      const tank = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.65, 2.2), bodyMaterial);
+      tank.position.y = 1.3;
+      tank.castShadow = true;
+      group.add(tank);
+
+      const top = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.45, 1.4), accentMaterial);
+      top.position.y = 2.45;
+      top.castShadow = true;
+      group.add(top);
+
+      const bushings = [
+        [-1.0, 2.9, -0.55],
+        [0.0, 2.95, 0.0],
+        [1.0, 2.9, 0.55]
+      ];
+      bushings.forEach(([x, y, z]) => {
+        const bushing = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.8, 8), darkMaterial);
+        bushing.position.set(x, y, z);
+        bushing.rotation.z = Math.PI / 2;
+        bushing.castShadow = true;
+        group.add(bushing);
+      });
+
+      const radiatorMaterial = new THREE.MeshStandardMaterial({ color: 0x50555b, roughness: 0.9, metalness: 0.08 });
+      for (let i = -1; i <= 1; i += 1) {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.2, 1.8), radiatorMaterial);
+        fin.position.set(1.9, 1.5, i * 0.7);
+        fin.castShadow = true;
+        group.add(fin);
+      }
+
+      const label = createLabelSprite([
+        `${codigo}`,
+        `${getValue(attrs, ['SED_POT_INST', 'SED_POT_SED', 'SED_POT_NOM'], 'N/A')} kVA`
+      ], {
+        fontSize: 16,
+        scale: 0.85
+      });
+      label.position.set(0, 4.1, 0);
+      group.add(label);
+
       return group;
     }
 
-    function createPole3D(x, z, name) {
+    function createPole3D(point, attrs, headingRad, codigo) {
       const group = new THREE.Group();
-      const poleGeometry = new THREE.CylinderGeometry(0.15, 0.2, 8, 12);
-      const poleMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
-      const pole = new THREE.Mesh(poleGeometry, poleMaterial);
-      pole.position.y = 4;
+      group.position.set(point.x, 0, point.z);
+      group.rotation.y = headingRad;
+      group.userData = {
+        type: 'pole',
+        name: codigo,
+        armados: extractArmados(attrs)
+      };
+
+      const height = Math.max(5.8, Math.min(13, parseMetricNumber(getValue(attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT));
+      const poleMaterial = new THREE.MeshStandardMaterial({
+        color: materialColorForPole(attrs),
+        roughness: 0.92,
+        metalness: 0.03
+      });
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, height, 10), poleMaterial);
+      pole.position.y = height / 2;
       pole.castShadow = true;
       group.add(pole);
-      group.position.set(x, 0, z);
-      group.userData = { type: 'pole', name: name || 'Suministro' };
+
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), poleMaterial);
+      cap.position.y = height + 0.05;
+      cap.castShadow = true;
+      group.add(cap);
+
+      const armados = extractArmados(attrs);
+      const armBase = height * 0.78;
+      const armMaterial = new THREE.MeshStandardMaterial({ color: 0x4d545a, roughness: 0.55, metalness: 0.3 });
+      const insulatorMaterial = new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.35, metalness: 0.05 });
+
+      if (!armados.length) {
+        armados.push({ codigo: 'STD', descripcion: 'Estructura', cantidad: 1 });
+      }
+
+      armados.forEach((armado, index) => {
+        const armWidth = 2.2 + Math.min(armado.cantidad, 4) * 0.38;
+        const y = armBase - index * 0.55;
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(armWidth, 0.14, 0.18), armMaterial);
+        beam.position.set(0, y, 0);
+        beam.castShadow = true;
+        group.add(beam);
+
+        const brace = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.9, 6), armMaterial);
+        brace.position.set(0, y - 0.45, 0);
+        brace.rotation.z = Math.PI / 2;
+        brace.castShadow = true;
+        group.add(brace);
+
+        const endLeft = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), insulatorMaterial);
+        endLeft.position.set(-armWidth / 2, y, 0);
+        endLeft.castShadow = true;
+        group.add(endLeft);
+
+        const endRight = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), insulatorMaterial);
+        endRight.position.set(armWidth / 2, y, 0);
+        endRight.castShadow = true;
+        group.add(endRight);
+      });
+
       return group;
     }
 
-    function createHouse3D(x, z, name) {
+    function createSupply3D(point, attrs, codigo) {
       const group = new THREE.Group();
-      const houseGeometry = new THREE.BoxGeometry(2, 2, 2);
-      const houseMaterial = new THREE.MeshLambertMaterial({ color: 0xd4af37 });
-      const house = new THREE.Mesh(houseGeometry, houseMaterial);
-      house.position.y = 1;
-      house.castShadow = true;
-      group.add(house);
-      group.position.set(x, 0, z);
-      group.userData = { type: 'house', name: name || 'Casa' };
+      group.position.set(point.x, 0, point.z);
+      group.userData = { type: 'supply', name: codigo };
+
+      const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xd8b45d, roughness: 0.8, metalness: 0.05 });
+      const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.95, metalness: 0.02 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.2, 1.45), wallMaterial);
+      body.position.y = 0.6;
+      body.castShadow = true;
+      group.add(body);
+
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(1.25, 0.8, 4), roofMaterial);
+      roof.position.y = 1.65;
+      roof.rotation.y = Math.PI / 4;
+      roof.castShadow = true;
+      group.add(roof);
+
+      const label = createLabelSprite(String(codigo || 'SUM'), {
+        fontSize: 14,
+        scale: 0.7
+      });
+      label.position.set(0, 2.9, 0);
+      group.add(label);
+
       return group;
     }
 
-    function init3D() {
+    function createCircuit3D(point, attrs, codigo) {
+      const group = new THREE.Group();
+      group.position.set(point.x, 0, point.z);
+      group.userData = { type: 'circuit', name: codigo };
+
+      const service = getTipoServicio(getValue(attrs, ['SAL_TIP_SRV'], 'N/A'));
+      const color = service === 'Alumbrado Publico' ? 0xf2d14f : service === 'Servicio Particular + Alumbrado Publico' ? 0x83d58a : 0x6fa8dc;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.75, 0.75), new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.2 }));
+      body.position.y = 0.42;
+      body.castShadow = true;
+      group.add(body);
+
+      const marker = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0.1 }));
+      marker.position.y = 1.05;
+      marker.castShadow = true;
+      group.add(marker);
+
+      return group;
+    }
+
+    function createRetained3D(point, polePoint, attrs, codigo) {
+      const group = new THREE.Group();
+      group.position.set(point.x, 0, point.z);
+      group.userData = { type: 'retained', name: codigo };
+
+      const steel = new THREE.MeshStandardMaterial({ color: 0x5e6670, roughness: 0.5, metalness: 0.35 });
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 1.2, 8), steel);
+      rod.position.y = 0.6;
+      rod.castShadow = true;
+      group.add(rod);
+
+      const anchor = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.4, 6), steel);
+      anchor.position.y = 0.18;
+      anchor.rotation.x = Math.PI;
+      anchor.castShadow = true;
+      group.add(anchor);
+
+      if (polePoint) {
+        const top = polePoint.clone();
+        top.y += 0.15;
+        const tie = createCableSpan(top, new THREE.Vector3(point.x, 0.95, point.z), {
+          color: 0xb04343,
+          radius: 0.035,
+          type: 'A',
+          opacity: 0.95
+        });
+        register3DObject(tie, lineas3D);
+      }
+
+      return group;
+    }
+
+    function createPat3D(point, polePoint, attrs, codigo) {
+      const group = new THREE.Group();
+      group.position.set(point.x, 0, point.z);
+      group.userData = { type: 'pat', name: codigo };
+
+      const earth = new THREE.MeshStandardMaterial({ color: 0x3b4f3a, roughness: 1, metalness: 0 });
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 1.1, 8), earth);
+      rod.position.y = 0.55;
+      rod.castShadow = true;
+      group.add(rod);
+
+      const bar1 = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.1, 6), earth);
+      bar1.position.set(0, 0.15, 0);
+      bar1.rotation.z = Math.PI / 2;
+      group.add(bar1);
+
+      const bar2 = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.8, 6), earth);
+      bar2.position.set(0, -0.02, 0);
+      bar2.rotation.z = Math.PI / 2;
+      group.add(bar2);
+
+      const label = createLabelSprite([
+        String(codigo || 'PAT'),
+        `${redondear(parseMetricNumber(getValue(attrs, ['PAT_RES'], 0)), 2)} Ω`
+      ], {
+        fontSize: 14,
+        scale: 0.65
+      });
+      label.position.set(0, 2.0, 0);
+      group.add(label);
+
+      if (polePoint) {
+        const connection = createCableSpan(polePoint.clone().add(new THREE.Vector3(0, 0.25, 0)), new THREE.Vector3(point.x, 0.2, point.z), {
+          color: 0x2f6c37,
+          radius: 0.02,
+          type: 'S',
+          opacity: 0.9
+        });
+        register3DObject(connection, lineas3D);
+      }
+
+      return group;
+    }
+
+    function frameCameraToSystem() {
+      if (!system3DRoot || !camera || !controls) return;
+      const box = new THREE.Box3().setFromObject(system3DRoot);
+      if (box.isEmpty()) return;
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxSize = Math.max(size.x, size.y, size.z);
+      const distance = Math.max(35, maxSize * 1.45);
+      camera.near = 0.1;
+      camera.far = Math.max(2000, distance * 20);
+      camera.updateProjectionMatrix();
+      camera.position.set(center.x + distance, center.y + distance * 0.65 + 18, center.z + distance);
+      controls.target.copy(center);
+      controls.maxDistance = distance * 4;
+      controls.minDistance = Math.max(8, distance * 0.12);
+      controls.update();
+    }
+
+    function update3DStats(stats) {
+      document.getElementById('current3DSystem').textContent = stats.label;
+      document.getElementById('countTransformers3D').textContent = stats.transformers;
+      document.getElementById('countPoles3D').textContent = stats.poles;
+      document.getElementById('countCircuitos3D').textContent = stats.circuits;
+      document.getElementById('countVanos3D').textContent = stats.vanos;
+      document.getElementById('countCables3D').textContent = stats.cables;
+      document.getElementById('countArmados3D').textContent = stats.armados;
+      document.getElementById('countRetenidas3D').textContent = stats.retenidas;
+      document.getElementById('countPat3D').textContent = stats.pat;
+      document.getElementById('countSupplies3D').textContent = stats.suministros;
+    }
+
+    function reset3DStats() {
+      update3DStats({
+        label: 'sin carga',
+        transformers: 0,
+        poles: 0,
+        circuits: 0,
+        vanos: 0,
+        cables: 0,
+        armados: 0,
+        retenidas: 0,
+        pat: 0,
+        suministros: 0
+      });
+    }
+
+    async function obtenerDatosSistema3D(codigoSED) {
+      const [
+        subestaciones,
+        suministros,
+        circuitosBT,
+        postesBT,
+        retenidasBT,
+        puestasTierraBT,
+        tramosBT
+      ] = await Promise.all([
+        consultarArcgisReporte(96, whereEquals('SED_COD_SED', codigoSED), true),
+        consultarArcgisReporte(24, whereEquals('SUM_COD_SED', codigoSED), true),
+        consultarArcgisReporte(25, whereEquals('SAL_COD_SED', codigoSED), true),
+        consultarArcgisReporte(27, whereEquals('NOD_COD_SED', codigoSED), true),
+        consultarArcgisReporte(28, whereEquals('RET_COD_SED', codigoSED), true),
+        consultarArcgisReporte(29, whereEquals('PAT_COD_SED', codigoSED), true),
+        consultarArcgisReporte(33, whereEquals('TBT_COD_SED', codigoSED), true)
+      ]);
+
+      return {
+        subestacion: subestaciones[0] || null,
+        suministros,
+        circuitosBT,
+        postesBT,
+        retenidasBT,
+        puestasTierraBT,
+        tramosBT
+      };
+    }
+
+    function construirSistema3D(data, codigoSED) {
+      clear3DScene();
+
+      const originLatLng = pointToLatLng(data.subestacion?.geometry);
+      if (!originLatLng) {
+        throw new Error('La subestación seleccionada no tiene geometría válida para 3D.');
+      }
+
+      const [originLat, originLng] = originLatLng;
+      const origin = { lat: originLat, lng: originLng };
+      const sedAttrs = data.subestacion?.attributes || {};
+      const labelSed = `${codigoSED} | ${getValue(sedAttrs, ['SED_NOM_SED'], 'N/A')}`;
+
+      const transformerPoint = new THREE.Vector3(0, 0, 0);
+      const projectedLines = [];
+      const poleIndex = new Map();
+      const stats = {
+        label: labelSed,
+        transformers: 0,
+        poles: 0,
+        circuits: 0,
+        vanos: 0,
+        cables: 0,
+        armados: 0,
+        retenidas: 0,
+        pat: 0,
+        suministros: 0
+      };
+
+      const transformer = createTransformer3D(transformerPoint, sedAttrs, codigoSED);
+      register3DObject(transformer, transformadores3D);
+      stats.transformers = 1;
+
+      const circuitos = [];
+      data.circuitosBT.forEach((feature) => {
+        const point = pointToLatLng(feature.geometry);
+        if (!point) return;
+        const local = pointToLocal3D(point, origin, 0);
+        const attrs = feature.attributes || {};
+        const circuitoCode = getValue(attrs, ['SAL_COD_SAL'], 'CIR');
+        const circuit = createCircuit3D(local, attrs, circuitoCode);
+        circuit.position.y = 0;
+        const tranfoCable = createCableSpan(transformerPoint.clone().add(new THREE.Vector3(0, 3.0, 0)), new THREE.Vector3(local.x, 1.1, local.z), {
+          color: attrs.SAL_TIP_SRV === 'AP' ? 0xf1d44c : attrs.SAL_TIP_SRV === 'SP+AP' ? 0x7ec77e : 0x5b9bd5,
+          radius: 0.03,
+          type: 'A',
+          opacity: 0.85
+        });
+        register3DObject(tranfoCable, lineas3D);
+        register3DObject(circuit, circuitos3D);
+        circuitos.push({ attrs, point: local, code: circuitoCode });
+      });
+      stats.circuits = circuitos3D.length;
+
+      const poleItems = [];
+      data.postesBT.forEach((feature) => {
+        const point = pointToLatLng(feature.geometry);
+        if (!point) return;
+        const local = pointToLocal3D(point, origin, 0);
+        const attrs = feature.attributes || {};
+        const codigo = getValue(attrs, ['NOD_COD_NOD'], 'POSTE');
+        poleItems.push({ attrs, point: local, code: codigo });
+      });
+
+      const linePaths = data.tramosBT.map((feature) => {
+        const attrs = feature.attributes || {};
+        const tipo = normalizarTexto(getValue(attrs, ['TBT_COD_TIP_RED'], 'A'));
+        const geometryPaths = pathsToLatLngs(feature.geometry);
+        const projected = geometryPaths
+          .map((path) => path
+            .map((coord) => {
+              const lat = Number(coord[0]);
+              const lng = Number(coord[1]);
+              if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+              const local = latLngToLocal3D(lat, lng, origin);
+              return { x: local.x, z: local.z, lat, lng };
+            })
+            .filter(Boolean))
+          .filter((path) => path.length > 1);
+        projected.forEach((path) => {
+          projectedLines.push({ attrs, tipo, path });
+        });
+        return projected;
+      }).flat();
+
+      poleItems.forEach((poleItem) => {
+        const heading = nearestLineHeading(poleItem.point, projectedLines.map((entry) => entry.path));
+        const pole = createPole3D(poleItem.point, poleItem.attrs, heading + Math.PI / 2, poleItem.code);
+        register3DObject(pole, postes3D);
+        stats.poles += 1;
+        stats.armados += extractArmados(poleItem.attrs).length || 1;
+      });
+
+      data.suministros.forEach((feature) => {
+        const point = pointToLatLng(feature.geometry);
+        if (!point) return;
+        const local = pointToLocal3D(point, origin, 0);
+        const attrs = feature.attributes || {};
+        const codigo = getValue(attrs, ['SUM_COD_SUM'], 'SUM');
+        const supply = createSupply3D(local, attrs, codigo);
+        register3DObject(supply, suministros3D);
+      });
+      stats.suministros = suministros3D.length;
+
+      data.tramosBT.forEach((feature) => {
+        const attrs = feature.attributes || {};
+        const tipoRed = normalizarTexto(getValue(attrs, ['TBT_COD_TIP_RED'], 'A'));
+        const paths = pathsToLatLngs(feature.geometry);
+        paths.forEach((path) => {
+          const projected = path
+            .map((coord) => {
+              const lat = Number(coord[0]);
+              const lng = Number(coord[1]);
+              if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+              const local = latLngToLocal3D(lat, lng, origin);
+              return { x: local.x, z: local.z };
+            })
+            .filter(Boolean);
+          if (projected.length < 2) return;
+
+          for (let i = 1; i < projected.length; i += 1) {
+            const a2d = projected[i - 1];
+            const b2d = projected[i];
+            const dist2D = Math.hypot(b2d.x - a2d.x, b2d.z - a2d.z);
+            if (dist2D < 0.2) continue;
+            const poleA = nearestPoleForPoint(a2d, poleItems);
+            const poleB = nearestPoleForPoint(b2d, poleItems);
+            const startHeight = tipoRed === 'S' ? DEFAULT_SUBTER_HEIGHT : (poleA ? (parseMetricNumber(getValue(poleA.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78 : DEFAULT_AERIAL_HEIGHT);
+            const endHeight = tipoRed === 'S' ? DEFAULT_SUBTER_HEIGHT : (poleB ? (parseMetricNumber(getValue(poleB.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78 : DEFAULT_AERIAL_HEIGHT);
+            const start = new THREE.Vector3(a2d.x, startHeight, a2d.z);
+            const end = new THREE.Vector3(b2d.x, endHeight, b2d.z);
+            const cable = createCableSpan(start, end, {
+              color: tipoRed === 'S' ? 0x1f4c89 : tipoRed === 'C' ? 0x2d8ca1 : 0x1f1f1f,
+              radius: tipoRed === 'S' ? 0.028 : 0.045,
+              type: tipoRed,
+              opacity: tipoRed === 'S' ? 0.92 : 0.98
+            });
+            register3DObject(cable, lineas3D);
+
+            const lengthMeters = dist2D / WORLD_SCALE_3D;
+            const label = createLabelSprite(`${redondear(lengthMeters, 1)} m`, {
+              fontSize: 12,
+              scale: 0.55,
+              background: 'rgba(28, 36, 44, 0.58)'
+            });
+            const mid = start.clone().add(end).multiplyScalar(0.5);
+            mid.y += tipoRed === 'S' ? 0.12 : 0.55;
+            label.position.copy(mid);
+            register3DObject(label, vanos3D);
+            stats.vanos += 1;
+            stats.cables += 1;
+          }
+        });
+      });
+
+      data.retenidasBT.forEach((feature) => {
+        const point = pointToLatLng(feature.geometry);
+        if (!point) return;
+        const local = pointToLocal3D(point, origin, 0);
+        const attrs = feature.attributes || {};
+        const codigo = getValue(attrs, ['RET_COD_RET'], 'RET');
+        const poleCode = String(getValue(attrs, ['RET_COD_NOD'], '')).trim();
+        const poleMatch = poleItems.find((item) => String(item.code).trim() === poleCode);
+        const poleTop = poleMatch ? new THREE.Vector3(poleMatch.point.x, (parseMetricNumber(getValue(poleMatch.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78, poleMatch.point.z) : null;
+        const retained = createRetained3D(local, poleTop, attrs, codigo);
+        register3DObject(retained, retenidas3D);
+      });
+      stats.retenidas = retenidas3D.length;
+
+      data.puestasTierraBT.forEach((feature) => {
+        const point = pointToLatLng(feature.geometry);
+        if (!point) return;
+        const local = pointToLocal3D(point, origin, 0);
+        const attrs = feature.attributes || {};
+        const codigo = getValue(attrs, ['PAT_COD_PAT'], 'PAT');
+        const poleCode = String(getValue(attrs, ['PAT_COD_NOD'], '')).trim();
+        const poleMatch = poleItems.find((item) => String(item.code).trim() === poleCode);
+        const polePoint = poleMatch ? new THREE.Vector3(poleMatch.point.x, 0, poleMatch.point.z) : null;
+        const pat = createPat3D(local, polePoint, attrs, codigo);
+        register3DObject(pat, pat3D);
+      });
+      stats.transformers = transformadores3D.length;
+      stats.poles = postes3D.length;
+      stats.circuits = circuitos3D.length;
+      stats.suministros = suministros3D.length;
+      stats.retenidas = retenidas3D.length;
+      stats.pat = pat3D.length;
+      stats.vanos = vanos3D.length;
+      stats.cables = lineas3D.length;
+
+      update3DStats(stats);
+      frameCameraToSystem();
+
+      return {
+        codigo: codigoSED,
+        origin,
+        stats
+      };
+    }
+
+    async function cargarSistema3DActivo(force = false) {
+      const codigo = getSelected3DCode();
+      if (!codigo) {
+        showNotification('Seleccione una subestación o ingrese un código SED para la vista 3D', 'error');
+        return null;
+      }
+
+      if (!force && sistema3DActual?.codigo === codigo && elementos3D.length > 0) {
+        update3DStats(sistema3DActual.stats);
+        frameCameraToSystem();
+        return sistema3DActual;
+      }
+
+      if (sistema3DEnCarga && sistema3DCargaPromise) {
+        return sistema3DCargaPromise;
+      }
+
+      sistema3DEnCarga = true;
+      showLoadingMessage(`Construyendo vista 3D del sistema ${codigo}...`);
+
+      sistema3DCargaPromise = (async () => {
+        try {
+          const data = await obtenerDatosSistema3D(codigo);
+          const system = construirSistema3D(data, codigo);
+          sistema3DActual = system;
+          return system;
+        } catch (error) {
+          console.error('Error al construir la vista 3D:', error);
+          sistema3DActual = null;
+          reset3DStats();
+          showNotification(`No se pudo construir la vista 3D: ${error.message}`, 'error', 7000);
+          return null;
+        } finally {
+          sistema3DEnCarga = false;
+          sistema3DCargaPromise = null;
+          hideLoadingMessage();
+        }
+      })();
+
+      return sistema3DCargaPromise;
+    }
+
+    async function refrescarSistema3D() {
+      if (!scene) return;
+      await cargarSistema3DActivo(true);
+      animate3D();
+    }
+
+    async function init3D() {
       const container = document.getElementById('view3D');
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x87CEEB);
-      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-      camera.position.set(20, 15, 20);
-      renderer = new THREE.WebGLRenderer({ antialias: true });
+      scene.background = new THREE.Color(0x9fd6f0);
+      scene.fog = new THREE.Fog(0x9fd6f0, 180, 900);
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2500);
+      camera.position.set(60, 45, 60);
+
+      const existingCanvas = container.querySelector('canvas');
+      if (existingCanvas) existingCanvas.remove();
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.domElement.style.display = 'block';
       container.appendChild(renderer.domElement);
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-      scene.add(ambientLight);
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      directionalLight.position.set(50, 50, 50);
-      directionalLight.castShadow = true;
-      scene.add(directionalLight);
+      const hemisphere = new THREE.HemisphereLight(0xffffff, 0x5a7248, 1.1);
+      scene.add(hemisphere);
 
-      const groundGeometry = new THREE.PlaneGeometry(200, 200);
-      const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
-      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+      sun.position.set(100, 140, 90);
+      sun.castShadow = true;
+      sun.shadow.mapSize.width = 2048;
+      sun.shadow.mapSize.height = 2048;
+      sun.shadow.camera.left = -140;
+      sun.shadow.camera.right = 140;
+      sun.shadow.camera.top = 140;
+      sun.shadow.camera.bottom = -140;
+      scene.add(sun);
+
+      const fill = new THREE.DirectionalLight(0xdfeeff, 0.35);
+      fill.position.set(-80, 50, -60);
+      scene.add(fill);
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(1400, 1400, 40, 40),
+        new THREE.MeshStandardMaterial({ color: 0xa9e68f, roughness: 1, metalness: 0 })
+      );
       ground.rotation.x = -Math.PI / 2;
       ground.receiveShadow = true;
       scene.add(ground);
 
+      const grid = new THREE.GridHelper(1400, 70, 0x7a9b7a, 0xc3dfc3);
+      grid.material.transparent = true;
+      grid.material.opacity = 0.24;
+      scene.add(grid);
+
+      system3DRoot = new THREE.Group();
+      scene.add(system3DRoot);
+
       if (typeof THREE.OrbitControls !== 'undefined') {
         controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
+        controls.dampingFactor = 0.06;
+        controls.maxPolarAngle = Math.PI / 2.08;
+        controls.minDistance = 10;
+        controls.maxDistance = 2200;
       }
 
-      cargarElementos3D();
-    }
-
-    function cargarElementos3D() {
-      [...transformadores3D, ...postes3D, ...casas3D].forEach(element => {
-        scene.remove(element);
-      });
-      transformadores3D = [];
-      postes3D = [];
-      casas3D = [];
-
-      capaTrafo.eachLayer(layer => {
-        if (layer.getLatLng) {
-          const latlng = layer.getLatLng();
-          const x = (latlng.lng + 69.97) * 100;
-          const z = (latlng.lat + 15.55) * 100;
-          const transformer = createTransformer3D(x, z, 'Transformador');
-          scene.add(transformer);
-          transformadores3D.push(transformer);
-        }
-      });
-
-      capaSuministros.eachLayer(layer => {
-        if (layer.getLatLng) {
-          const latlng = layer.getLatLng();
-          const x = (latlng.lng + 69.97) * 100;
-          const z = (latlng.lat + 15.55) * 100;
-          const pole = createPole3D(x, z, 'Suministro');
-          scene.add(pole);
-          postes3D.push(pole);
-        }
-      });
-
-      capaExcel.eachLayer(layer => {
-        if (layer.getLatLng) {
-          const latlng = layer.getLatLng();
-          const x = (latlng.lng + 69.97) * 100;
-          const z = (latlng.lat + 15.55) * 100;
-          const house = createHouse3D(x, z, 'Casa');
-          scene.add(house);
-          casas3D.push(house);
-        }
-      });
-
-      document.getElementById('countTransformers3D').textContent = transformadores3D.length;
-      document.getElementById('countPoles3D').textContent = postes3D.length;
-      document.getElementById('countExcel3D').textContent = casas3D.length;
+      await cargarSistema3DActivo(true);
     }
 
     function animate3D() {
@@ -2999,14 +3739,14 @@
       }
     }
 
-    function toggle3DView() {
+    async function toggle3DView() {
       const view3D = document.getElementById('view3D');
       if (view3D.style.display === 'none' || view3D.style.display === '') {
         view3D.style.display = 'block';
         if (!scene) {
-          init3D();
+          await init3D();
         } else {
-          cargarElementos3D();
+          await cargarSistema3DActivo(true);
         }
         animate3D();
       } else {

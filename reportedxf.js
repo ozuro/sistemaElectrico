@@ -1,5 +1,7 @@
 (function () {
   const ARCGIS_BASE_URL = 'https://gis.electropuno.com.pe/arcgis_server/rest/services/RedElectroPuno/MapServer';
+  const CARTO_BASE_URL = 'https://geocatminnube.ingemmet.gob.pe/arcgis/rest/services/SERV_CARTOGRAFIA_BASE_WGS84/MapServer';
+  const CONTEXT_BUFFER_METERS = 160;
   const DEG = Math.PI / 180;
   const PF = 0.9;
 
@@ -105,6 +107,12 @@
     return n.toFixed(decimals).replace(/\.?0+$/, '');
   }
 
+  function dxfColor(value) {
+    const color = Number(value);
+    if (!Number.isInteger(color) || color < 1 || color > 255) return null;
+    return color;
+  }
+
   function textSafe(value) {
     return String(value ?? '')
       .replace(/\r?\n/g, ' ')
@@ -146,6 +154,21 @@
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toUpperCase();
+  }
+
+  function yesFlag(attrs, fields) {
+    const raw = normalize(getValueSafe(attrs, fields, ''));
+    return raw === 'S' || raw === 'SI' || raw === 'YES' || raw === 'TRUE' || raw === '1';
+  }
+
+  function angleFromAttrs(attrs, fields, fallback = 45) {
+    for (const field of fields || []) {
+      const value = attrs?.[field];
+      if (value === undefined || value === null || value === '') continue;
+      const parsed = num(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return fallback;
   }
 
   function getSelectedCodigo(codigoSED) {
@@ -228,26 +251,111 @@
       .filter((path) => path.length > 0);
   }
 
-  function queryArcgis(layerId, where, returnGeometry = true) {
+  function createLatLonBounds() {
+    return {
+      minLat: Number.POSITIVE_INFINITY,
+      minLon: Number.POSITIVE_INFINITY,
+      maxLat: Number.NEGATIVE_INFINITY,
+      maxLon: Number.NEGATIVE_INFINITY
+    };
+  }
+
+  function trackLatLon(bounds, lat, lon) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    bounds.minLat = Math.min(bounds.minLat, lat);
+    bounds.minLon = Math.min(bounds.minLon, lon);
+    bounds.maxLat = Math.max(bounds.maxLat, lat);
+    bounds.maxLon = Math.max(bounds.maxLon, lon);
+  }
+
+  function trackFeatureLatLon(bounds, feature) {
+    const point = pointToLatLon(feature?.geometry);
+    if (point) {
+      trackLatLon(bounds, point.lat, point.lon);
+      return;
+    }
+
+    pathsToLatLngsSafe(feature?.geometry).forEach((path) => {
+      path.forEach(([lat, lon]) => trackLatLon(bounds, lat, lon));
+    });
+  }
+
+  function pointToLatLon(geometry) {
+    const lat = Number(geometry?.y);
+    const lon = Number(geometry?.x);
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+  }
+
+  function isValidLatLonBounds(bounds) {
+    return (
+      bounds &&
+      Number.isFinite(bounds.minLat) &&
+      Number.isFinite(bounds.minLon) &&
+      Number.isFinite(bounds.maxLat) &&
+      Number.isFinite(bounds.maxLon)
+    );
+  }
+
+  function expandLatLonBounds(bounds, meters = CONTEXT_BUFFER_METERS) {
+    if (!isValidLatLonBounds(bounds)) return null;
+    const centerLat = (bounds.minLat + bounds.maxLat) / 2;
+    const latPad = meters / 111320;
+    const lonPad = meters / (111320 * Math.max(Math.cos(centerLat * DEG), 0.2));
+    return {
+      minLat: bounds.minLat - latPad,
+      minLon: bounds.minLon - lonPad,
+      maxLat: bounds.maxLat + latPad,
+      maxLon: bounds.maxLon + lonPad
+    };
+  }
+
+  function envelopeFromLatLonBounds(bounds) {
+    if (!isValidLatLonBounds(bounds)) return null;
+    return {
+      xmin: bounds.minLon,
+      ymin: bounds.minLat,
+      xmax: bounds.maxLon,
+      ymax: bounds.maxLat,
+      spatialReference: { wkid: 4326 }
+    };
+  }
+
+  function collectNetworkLatLonBounds(data) {
+    const bounds = createLatLonBounds();
+    ['subestacion', 'suministros', 'circuitosBT', 'postesBT', 'tramosBT', 'retenidasBT', 'puestasTierraBT']
+      .forEach((key) => (data[key] || []).forEach((feature) => trackFeatureLatLon(bounds, feature)));
+    return isValidLatLonBounds(bounds) ? bounds : null;
+  }
+
+  function queryArcgisFromBase(baseUrl, layerId, where, returnGeometry = true, options = {}) {
     return new Promise(async (resolve, reject) => {
       try {
         const features = [];
         let offset = 0;
         let guard = 0;
         let more = true;
+        const maxFeatures = options.maxFeatures ?? 3000;
+        const batchSize = Math.min(options.resultRecordCount ?? 1000, 1000);
 
-        while (more && guard < 20) {
+        while (more && guard < 20 && features.length < maxFeatures) {
           const params = new URLSearchParams({
             f: 'json',
             where,
-            outFields: '*',
+            outFields: options.outFields || '*',
             returnGeometry: returnGeometry ? 'true' : 'false',
-            outSR: 4326,
-            resultRecordCount: '1000',
+            outSR: String(options.outSR ?? 4326),
+            resultRecordCount: String(Math.min(batchSize, maxFeatures - features.length)),
             resultOffset: String(offset)
           });
 
-          const response = await fetch(`${arcgisQueryUrl(layerId)}?${params}`);
+          if (options.geometry) {
+            params.set('geometry', JSON.stringify(options.geometry));
+            params.set('geometryType', options.geometryType || 'esriGeometryEnvelope');
+            params.set('inSR', String(options.inSR ?? 4326));
+            params.set('spatialRel', options.spatialRel || 'esriSpatialRelIntersects');
+          }
+
+          const response = await fetch(`${baseUrl}/${layerId}/query?${params}`);
           if (!response.ok) {
             throw new Error(`HTTP ${response.status} consultando capa ${layerId}`);
           }
@@ -269,6 +377,10 @@
         reject(error);
       }
     });
+  }
+
+  function queryArcgis(layerId, where, returnGeometry = true, options = {}) {
+    return queryArcgisFromBase(ARCGIS_BASE_URL, layerId, where, returnGeometry, options);
   }
 
   function distMeters(a, b) {
@@ -422,13 +534,6 @@
       bounds.maxX = Math.max(bounds.maxX, p.x);
       bounds.maxY = Math.max(bounds.maxY, p.y);
     }
-  }
-
-  function subtractPoint(point, origin) {
-    return {
-      x: point.x - origin.x,
-      y: point.y - origin.y
-    };
   }
 
   function clamp(value, min, max) {
@@ -637,6 +742,84 @@
     }
   }
 
+  function rotateLocalPoint(origin, dx, dy, angleDeg) {
+    const rad = angleDeg * DEG;
+    return {
+      x: origin.x + dx * Math.cos(rad) - dy * Math.sin(rad),
+      y: origin.y + dx * Math.sin(rad) + dy * Math.cos(rad)
+    };
+  }
+
+  function drawGroundSymbol(writer, point, angle = 0, layer = 'BT_PUESTA_TIERRA', color = 3) {
+    const stemTop = rotateLocalPoint(point, 0, 0, angle);
+    const stemBottom = rotateLocalPoint(point, 0, -2.4, angle);
+    writer.addLine(layer, stemTop.x, stemTop.y, stemBottom.x, stemBottom.y, color);
+
+    const bars = [
+      { y: -2.4, half: 2.1 },
+      { y: -2.9, half: 1.5 },
+      { y: -3.35, half: 0.9 }
+    ];
+
+    bars.forEach((bar) => {
+      const left = rotateLocalPoint(point, -bar.half, bar.y, angle);
+      const right = rotateLocalPoint(point, bar.half, bar.y, angle);
+      writer.addLine(layer, left.x, left.y, right.x, right.y, color);
+    });
+  }
+
+  function drawRetainedSymbol(writer, point, angle = 45, layer = 'BT_RETENIDAS', color = 2) {
+    const dir = rotateLocalPoint(point, 4.5, 0, angle);
+    const hook = rotateLocalPoint(point, 1.0, -0.8, angle);
+    const hook2 = rotateLocalPoint(point, 1.8, -1.4, angle);
+    writer.addLine(layer, point.x, point.y, dir.x, dir.y, color);
+    writer.addLine(layer, hook.x, hook.y, hook2.x, hook2.y, color);
+    writer.addCircle(layer, dir.x, dir.y, 0.35, color);
+  }
+
+  function drawSpanLengthLabel(writer, a, b, layer = 'BT_VANOS', color = 8) {
+    const lengthM = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!Number.isFinite(lengthM) || lengthM < 1.5) return;
+    const mid = midpoint([a, b]);
+    const angle = pathAngleDegrees([a, b]);
+    const rad = angle * DEG;
+    const offset = {
+      x: -Math.sin(rad) * 1.6,
+      y: Math.cos(rad) * 1.6
+    };
+    const labelPoint = {
+      x: mid.x + offset.x,
+      y: mid.y + offset.y
+    };
+    writer.addText(layer, labelPoint.x, labelPoint.y, `${fmt(lengthM, 1)} m`, 1.0, readableTextAngle(angle), color);
+  }
+
+  function drawPolylineContext(writer, features, zone, layer, color, options = {}) {
+    features.forEach((feature, index) => {
+      const paths = flattenMultiLinePaths(feature, zone);
+      if (!paths.length) return;
+      paths.forEach((path) => {
+        writer.addPathSegments(layer, path, color);
+        const shouldLabel = options.labelEvery ? index % options.labelEvery === 0 : true;
+        if (options.labelField && shouldLabel) {
+          const rawLabelValue = getValueByField(feature.attributes || {}, options.labelField, '');
+          const labelValue = textSafe(rawLabelValue);
+          if (rawLabelValue && rawLabelValue !== 'N/A') {
+            const mid = midpoint(path);
+            writer.addText(options.labelLayer || layer, mid.x, mid.y + (options.labelOffsetY ?? 0), labelValue.substring(0, options.labelLimit ?? 26), options.textHeight ?? 1.0, readableTextAngle(pathAngleDegrees(path)), options.labelColor ?? color);
+          }
+        }
+        if (options.labelAltitudeField && shouldLabel) {
+          const altitude = getValueByField(feature.attributes || {}, options.labelAltitudeField, '');
+          if (altitude !== '' && altitude !== 'N/A') {
+            const mid = midpoint(path);
+            writer.addText(options.labelLayer || layer, mid.x, mid.y + (options.labelOffsetY ?? 0), `${fmt(altitude, 0)} m`, options.textHeight ?? 0.9, readableTextAngle(pathAngleDegrees(path)), options.labelColor ?? color);
+          }
+        }
+      });
+    });
+  }
+
   function createBounds() {
     return {
       minX: Number.POSITIVE_INFINITY,
@@ -655,8 +838,12 @@
 
     ensureLayer(name, color = 7) {
       if (!this.layers.has(name)) {
-        this.layers.set(name, { name, color });
+        this.layers.set(name, { name, color: dxfColor(color) ?? 7 });
       }
+    }
+
+    layerColor(name, fallback = 7) {
+      return this.layers.get(name)?.color ?? dxfColor(fallback) ?? 7;
     }
 
     updateBoundsPoint(x, y) {
@@ -689,8 +876,9 @@
         '31',
         '0'
       ];
-      if (color !== null && color !== undefined) {
-        entity.splice(4, 0, '62', String(color));
+      const entityColor = dxfColor(color);
+      if (entityColor !== null) {
+        entity.splice(4, 0, '62', String(entityColor));
       }
       this.entities.push(entity.join('\n'));
     }
@@ -720,8 +908,9 @@
         '40',
         fmt(radius)
       ];
-      if (color !== null && color !== undefined) {
-        entity.splice(4, 0, '62', String(color));
+      const entityColor = dxfColor(color);
+      if (entityColor !== null) {
+        entity.splice(4, 0, '62', String(entityColor));
       }
       this.entities.push(entity.join('\n'));
     }
@@ -746,8 +935,9 @@
         '30',
         '0'
       ];
-      if (color !== null && color !== undefined) {
-        lines.splice(4, 0, '62', String(color));
+      const entityColor = dxfColor(color);
+      if (entityColor !== null) {
+        lines.splice(4, 0, '62', String(entityColor));
       }
       for (const p of points) {
         lines.push(
@@ -798,8 +988,9 @@
         '50',
         fmt(rotation)
       ];
-      if (color !== null && color !== undefined) {
-        entity.splice(4, 0, '62', String(color));
+      const entityColor = dxfColor(color);
+      if (entityColor !== null) {
+        entity.splice(4, 0, '62', String(entityColor));
       }
       this.entities.push(entity.join('\n'));
     }
@@ -810,10 +1001,11 @@
       });
     }
 
-    addLegendItem(layerLine, x, y, label, colorLayer, labelColor = null) {
-      this.addLine(colorLayer, x, y, x + 4, y, colorLayer);
-      this.addCircle(colorLayer, x + 2, y, 0.45, colorLayer);
-      this.addText(layerLine, x + 6, y - 0.8, label, 1.8, 0, labelColor ?? colorLayer);
+    addLegendItem(layerLine, x, y, label, sampleLayer, labelColor = null) {
+      const sampleColor = this.layerColor(sampleLayer, labelColor ?? 7);
+      this.addLine(sampleLayer, x, y, x + 4, y, sampleColor);
+      this.addCircle(sampleLayer, x + 2, y, 0.45, sampleColor);
+      this.addText(layerLine, x + 6, y - 0.8, label, 1.8, 0, labelColor ?? sampleColor);
     }
 
     toString() {
@@ -858,20 +1050,6 @@
         'txt',
         '4',
         ''
-      ].join('\n');
-      const blockRecordTable = [
-        '0',
-        'BLOCK_RECORD',
-        '2',
-        '*Model_Space',
-        '70',
-        '0',
-        '0',
-        'BLOCK_RECORD',
-        '2',
-        '*Paper_Space',
-        '70',
-        '0'
       ].join('\n');
       const blocksSection = [
         '0',
@@ -930,6 +1108,14 @@
         '70',
         '6',
         '9',
+        '$INSBASE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '30',
+        '0',
+        '9',
         '$MEASUREMENT',
         '70',
         '1',
@@ -962,15 +1148,6 @@
         '70',
         '1',
         styleTable,
-        '0',
-        'ENDTAB',
-        '0',
-        'TABLE',
-        '2',
-        'BLOCK_RECORD',
-        '70',
-        '2',
-        blockRecordTable,
         '0',
         'ENDTAB',
         '0',
@@ -1216,7 +1393,6 @@
 
   function createReportModel(code, data) {
     const zone = chooseZoneFromData(data);
-    const hemisphere = 'S';
     const writer = new DxfWriter();
 
     writer.ensureLayer('BT_TRAFO', 1);
@@ -1230,14 +1406,35 @@
     writer.ensureLayer('BT_LINEAS_AEREAS', 5);
     writer.ensureLayer('BT_LINEAS_SUBT', 3);
     writer.ensureLayer('BT_LINEAS_SUBAC', 4);
+    writer.ensureLayer('BT_GRID', 8);
+    writer.ensureLayer('BT_FRAME', 7);
+    writer.ensureLayer('BT_VANOS', 8);
+    writer.ensureLayer('BT_RETENIDAS', 2);
+    writer.ensureLayer('BT_PUESTA_TIERRA', 3);
+    writer.ensureLayer('BASE_CARRETERAS', 9);
+    writer.ensureLayer('BASE_CURVAS_NIVEL', 30);
+    writer.ensureLayer('BASE_CURVAS_SECUNDARIAS', 8);
 
-    const sed = data.subestacion[0]?.attributes || {};
-    const center = pointGeometryToUtm(data.subestacion[0]?.geometry, zone);
+    const subestacion = data.subestacion || [];
+    const suministros = data.suministros || [];
+    const circuitosBT = data.circuitosBT || [];
+    const postesBT = data.postesBT || [];
+    const retenidasBT = data.retenidasBT || [];
+    const puestasTierraBT = data.puestasTierraBT || [];
+    const tramosBT = data.tramosBT || [];
+    const carreteras = data.carreteras || [];
+    const curvasNivelPrimarias = data.curvasNivelPrimarias || [];
+    const curvasNivelSecundarias = data.curvasNivelSecundarias || [];
+    const poleByCode = new Map();
+    const groundedPoleCodes = new Set();
+
+    const sed = subestacion[0]?.attributes || {};
+    const center = pointGeometryToUtm(subestacion[0]?.geometry, zone);
     if (!center) {
       throw new Error('No se encontro geometria de la subestacion seleccionada.');
     }
-    const origin = center;
-    const localize = (point) => subtractPoint(point, origin);
+    const hemisphere = center.hemisphere || 'S';
+    const epsg = (hemisphere === 'S' ? 32700 : 32600) + zone;
 
     const summary = {
       code,
@@ -1247,20 +1444,26 @@
       ubigeo: getValueByField(sed, ['SED_COD_UBI'], 'N/A'),
       zone,
       hemisphere,
-      totalSupplyCount: data.suministros.length,
-      totalCircuitCount: data.circuitosBT.length,
-      totalPoleCount: data.postesBT.length,
-      totalLineCount: data.tramosBT.length,
-      totalPoleUnits: data.postesBT.reduce((acc, feature) => acc + countPoleUnits(feature.attributes || {}), 0)
+      epsg,
+      totalSupplyCount: suministros.length,
+      totalCircuitCount: circuitosBT.length,
+      totalPoleCount: postesBT.length,
+      totalLineCount: tramosBT.length,
+      totalRetenidaCount: retenidasBT.length,
+      totalPatCount: puestasTierraBT.length,
+      totalRoadCount: carreteras.length,
+      totalContourCount: curvasNivelPrimarias.length + curvasNivelSecundarias.length,
+      totalPoleGroundCount: 0,
+      totalPoleUnits: postesBT.reduce((acc, feature) => acc + countPoleUnits(feature.attributes || {}), 0)
     };
 
-    const cableSummary = estimateCableResistance(data.tramosBT);
-    const totalSupply = buildSupplySummary(data.suministros);
-    const voltage = estimateVoltage(data.circuitosBT);
-    const phase = estimatePhase(data.tramosBT);
+    const cableSummary = estimateCableResistance(tramosBT);
+    const totalSupply = buildSupplySummary(suministros);
+    const voltage = estimateVoltage(circuitosBT);
+    const phase = estimatePhase(tramosBT);
     const fallbackAmp = Math.max(
       0,
-      ...data.circuitosBT.map((feature) => num(getValueByField(feature.attributes || {}, ['SAL_CAP_AMP', 'SAL_COR_NOM'], 0)))
+      ...circuitosBT.map((feature) => num(getValueByField(feature.attributes || {}, ['SAL_CAP_AMP', 'SAL_COR_NOM'], 0)))
     );
     const drop = estimateVoltageDrop(
       totalSupply.demandaKw || totalSupply.potenciaKw,
@@ -1282,7 +1485,7 @@
     summary.dropPct = drop.dropPct;
     summary.status = assessAptitudeGeneral(drop);
     summary.note = drop.current > 0 ? 'Caida de tension estimada referencial' : 'Caida estimada con capacidad nominal por falta de demanda';
-    const centerLocal = localize(center);
+    const centerDxf = { x: center.x, y: center.y };
     const networkBounds = createBounds();
     const trackPoint = (point) => {
       if (!point) return;
@@ -1292,19 +1495,19 @@
       networkBounds.maxY = Math.max(networkBounds.maxY, point.y);
     };
     const trackPath = (points) => points.forEach(trackPoint);
-    const labelState = { boxes: [], center: centerLocal };
+    const labelState = { boxes: [], center: centerDxf };
     const circuitItems = [];
     const supplyItems = [];
     const poleItems = [];
     const lineItems = [];
 
-    trackPoint(centerLocal);
+    trackPoint(centerDxf);
 
-    data.circuitosBT.forEach((feature) => {
+    circuitosBT.forEach((feature) => {
       const attrs = feature.attributes || {};
       const p = pointGeometryToUtm(feature.geometry, zone);
       if (!p) return;
-      const pl = localize(p);
+      const pl = { x: p.x, y: p.y };
       trackPoint(pl);
       circuitItems.push({
         attrs,
@@ -1317,11 +1520,11 @@
       });
     });
 
-    data.suministros.forEach((feature) => {
+    suministros.forEach((feature) => {
       const attrs = feature.attributes || {};
       const p = pointGeometryToUtm(feature.geometry, zone);
       if (!p) return;
-      const pl = localize(p);
+      const pl = { x: p.x, y: p.y };
       trackPoint(pl);
       supplyItems.push({
         attrs,
@@ -1334,13 +1537,18 @@
       });
     });
 
-    data.postesBT.forEach((feature) => {
+    postesBT.forEach((feature) => {
       const attrs = feature.attributes || {};
       const p = pointGeometryToUtm(feature.geometry, zone);
       if (!p) return;
-      const pl = localize(p);
+      const pl = { x: p.x, y: p.y };
       trackPoint(pl);
       const posteCode = getValueByField(attrs, ['NOD_COD_NOD'], 'N/A');
+      const normalizedCode = normalize(posteCode);
+      poleByCode.set(normalizedCode, { point: pl, attrs });
+      if (yesFlag(attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER'])) {
+        groundedPoleCodes.add(normalizedCode);
+      }
       const armado = [
         getValueByField(attrs, ['NOD_COD_TIP_ARM_01'], ''),
         getValueByField(attrs, ['NOD_COD_TIP_ARM_02'], ''),
@@ -1358,12 +1566,13 @@
           `ARMADO ${armado}`,
           `CARGA ${carga}`,
           `LONGITUD ${longitud} m`,
-          `ESTADO ${status.estado}`
+          `ESTADO ${status.estado}`,
+          `ATERR ${yesFlag(attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER']) ? 'Si' : 'No'}`
         ]
       });
     });
 
-    data.tramosBT.forEach((feature) => {
+    tramosBT.forEach((feature) => {
       const attrs = feature.attributes || {};
       const type = classifyLineType(attrs);
       const layer = lineLayerName(type);
@@ -1372,15 +1581,15 @@
       if (!paths.length) return;
 
       paths.forEach((path) => {
-        const localPath = path.map((p) => localize(p));
-        trackPath(localPath);
-        const mid = midpoint(localPath);
-        const lengthM = polylineLength(localPath);
+        const dxfPath = path.map((p) => ({ x: p.x, y: p.y }));
+        trackPath(dxfPath);
+        const mid = midpoint(dxfPath);
+        const lengthM = polylineLength(dxfPath);
         lineItems.push({
           attrs,
           point: mid,
-          path: localPath,
-          angle: pathAngleDegrees(localPath),
+          path: dxfPath,
+          angle: pathAngleDegrees(dxfPath),
           layer,
           color,
           label: [
@@ -1393,13 +1602,31 @@
     });
 
     drawGrid(writer, networkBounds, 50, 'BT_GRID', 8);
+    drawPolylineContext(writer, carreteras, zone, 'BASE_CARRETERAS', 9, {
+      labelField: ['DESCRIP_E', 'DESCRIPCIO', 'via1', 'RUTA', 'DCR25'],
+      labelLayer: 'BASE_CARRETERAS',
+      labelColor: 9,
+      textHeight: 0.9,
+      labelOffsetY: 0.7,
+      labelLimit: 32,
+      labelEvery: 4
+    });
+    drawPolylineContext(writer, curvasNivelPrimarias, zone, 'BASE_CURVAS_NIVEL', 30, {
+      labelAltitudeField: ['altitud'],
+      labelLayer: 'BASE_CURVAS_NIVEL',
+      labelColor: 30,
+      textHeight: 0.8,
+      labelOffsetY: 0.5,
+      labelEvery: 3
+    });
+    drawPolylineContext(writer, curvasNivelSecundarias, zone, 'BASE_CURVAS_SECUNDARIAS', 8, {});
 
     // Transformer
-    writer.addCircle('BT_TRAFO', centerLocal.x, centerLocal.y, 2.2, 1);
-    writer.addLine('BT_TRAFO', centerLocal.x - 1.4, centerLocal.y, centerLocal.x + 1.4, centerLocal.y, 1);
-    writer.addLine('BT_TRAFO', centerLocal.x, centerLocal.y - 1.4, centerLocal.x, centerLocal.y + 1.4, 1);
-    writer.addText('BT_TRAFO', centerLocal.x - 3.0, centerLocal.y + 3.8, 'SUBESTACION', 2.0, 0, 1);
-    addFieldBox(writer, labelState, { x: centerLocal.x, y: centerLocal.y }, [
+    writer.addCircle('BT_TRAFO', centerDxf.x, centerDxf.y, 2.2, 1);
+    writer.addLine('BT_TRAFO', centerDxf.x - 1.4, centerDxf.y, centerDxf.x + 1.4, centerDxf.y, 1);
+    writer.addLine('BT_TRAFO', centerDxf.x, centerDxf.y - 1.4, centerDxf.x, centerDxf.y + 1.4, 1);
+    writer.addText('BT_TRAFO', centerDxf.x - 3.0, centerDxf.y + 3.8, 'SUBESTACION', 2.0, 0, 1);
+    addFieldBox(writer, labelState, { x: centerDxf.x, y: centerDxf.y }, [
       { label: 'SED', value: summary.code, labelColor: 4, valueColor: 7 },
       { label: 'NOMBRE', value: summary.name, labelColor: 4, valueColor: 7 },
       { label: 'POT', value: `${fmt(summary.powerKvA, 1)} kVA`, labelColor: 4, valueColor: 7 },
@@ -1450,28 +1677,100 @@
         { label: 'ARMADO', value: item.label[1].replace('ARMADO ', ''), labelColor: 6, valueColor: 7 },
         { label: 'CARGA', value: item.label[2].replace('CARGA ', ''), labelColor: 6, valueColor: 7 },
         { label: 'LONGITUD', value: item.label[3].replace('LONGITUD ', ''), labelColor: 6, valueColor: 7 },
-        { label: 'ESTADO', value: item.label[4].replace('ESTADO ', ''), labelColor: 6, valueColor: 7 }
+        { label: 'ESTADO', value: item.label[4].replace('ESTADO ', ''), labelColor: 6, valueColor: 7 },
+        { label: 'ATERR', value: item.label[5].replace('ATERR ', ''), labelColor: 6, valueColor: 7 }
       ], {
         width: 40,
-        height: 22,
-        rowHeight: 4.2,
+        height: 26,
+        rowHeight: 4.0,
         leftWidth: 14,
         borderColor: 30,
         leaderColor: 30,
         labelColor: 6,
         valueColor: 7,
-        textHeightLabel: 1.4,
-        textHeightValue: 1.4
+        textHeightLabel: 1.3,
+        textHeightValue: 1.3
       });
-      writer.addText('BT_FERRETERIA', item.point.x + 1.0, item.point.y - 1.8, `ATERR. ${getValueByField(item.attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER'], 'N/A')}`, 1.1, 0, 3);
+      const hasGround = yesFlag(item.attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER']);
+      if (hasGround) {
+        drawGroundSymbol(writer, { x: item.point.x + 1.8, y: item.point.y - 0.4 }, 0, 'BT_PUESTA_TIERRA', 3);
+      }
+      writer.addText('BT_FERRETERIA', item.point.x + 1.0, item.point.y - 1.8, `ATERR. ${hasGround ? 'Si' : 'No'}`, 1.1, 0, 3);
+    });
+
+    summary.totalPoleGroundCount = groundedPoleCodes.size;
+
+    retenidasBT.forEach((feature) => {
+      const attrs = feature.attributes || {};
+      const p = pointGeometryToUtm(feature.geometry, zone);
+      if (!p) return;
+      const pl = { x: p.x, y: p.y };
+      trackPoint(pl);
+      const code = getValueByField(attrs, ['RET_COD_RET'], 'N/A');
+      const tipo = getValueByField(attrs, ['RET_TIP_RET', 'RET_TIP_SUJ'], 'N/A');
+      const anchorCode = normalize(getValueByField(attrs, ['RET_COD_NOD'], ''));
+      const anchor = poleByCode.get(anchorCode);
+      const angle = angleFromAttrs(attrs, ['RET_ANG', 'RET_ANG_INC'], 45);
+      if (anchor?.point) {
+        writer.addLine('BT_RETENIDAS', anchor.point.x, anchor.point.y, pl.x, pl.y, 2);
+      }
+      drawRetainedSymbol(writer, pl, angle, 'BT_RETENIDAS', 2);
+      addLabelBox(writer, labelState, pl, [
+        `RET ${code}`,
+        `TIP ${tipo}`,
+        `NOD ${anchorCode || 'N/A'}`
+      ], {
+        width: 38,
+        rowHeight: 2.4,
+        borderColor: 2,
+        leaderColor: 2,
+        textColor: 7,
+        textHeight: 1.1,
+        preference: ['ur', 'dr', 'ul', 'dl']
+      });
+    });
+
+    puestasTierraBT.forEach((feature) => {
+      const attrs = feature.attributes || {};
+      const p = pointGeometryToUtm(feature.geometry, zone);
+      if (!p) return;
+      const pl = { x: p.x, y: p.y };
+      trackPoint(pl);
+      const code = getValueByField(attrs, ['PAT_COD_PAT'], 'N/A');
+      const tipo = getValueByField(attrs, ['PAT_TIP_PAT'], 'N/A');
+      const res = getValueByField(attrs, ['PAT_RES'], 'N/A');
+      const anchorCode = normalize(getValueByField(attrs, ['PAT_COD_NOD'], ''));
+      const anchor = poleByCode.get(anchorCode);
+      const angle = angleFromAttrs(attrs, ['PAT_ANG'], 0);
+      if (anchor?.point) {
+        writer.addLine('BT_PUESTA_TIERRA', anchor.point.x, anchor.point.y, pl.x, pl.y, 3);
+      }
+      drawGroundSymbol(writer, pl, angle, 'BT_PUESTA_TIERRA', 3);
+      addLabelBox(writer, labelState, pl, [
+        `PAT ${code}`,
+        `TIP ${tipo}`,
+        `RES ${fmt(res, 2)} Ohm`,
+        `NOD ${anchorCode || 'N/A'}`
+      ], {
+        width: 42,
+        rowHeight: 2.4,
+        borderColor: 3,
+        leaderColor: 3,
+        textColor: 7,
+        textHeight: 1.1,
+        preference: ['ul', 'ur', 'dl', 'dr']
+      });
     });
 
     lineItems.forEach((item) => {
       writer.addPathSegments(item.layer, item.path, item.color);
+      for (let i = 1; i < item.path.length; i += 1) {
+        drawSpanLengthLabel(writer, item.path[i - 1], item.path[i], 'BT_VANOS', 8);
+      }
       const rad = item.angle * DEG;
       const normalA = { x: -Math.sin(rad), y: Math.cos(rad) };
       const normalB = { x: Math.sin(rad), y: -Math.cos(rad) };
-      const toCenter = { x: centerLocal.x - item.point.x, y: centerLocal.y - item.point.y };
+      const toCenter = { x: centerDxf.x - item.point.x, y: centerDxf.y - item.point.y };
       const useA = normalA.x * toCenter.x + normalA.y * toCenter.y < normalB.x * toCenter.x + normalB.y * toCenter.y;
       const normal = useA ? normalA : normalB;
       const labelPos = offsetPoint(item.point, normal.x * 3.5, normal.y * 3.5);
@@ -1513,7 +1812,7 @@
     const titleX1 = writer.bounds.maxX + 18;
     const titleY2 = writer.bounds.maxY + 10;
     const titleW = 140;
-    const titleH = 110;
+    const titleH = 145;
     const titleX2 = titleX1 + titleW;
     const titleY1 = titleY2 - titleH;
 
@@ -1531,10 +1830,10 @@
     writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 44, `CAIDA: ${fmt(summary.dropPct, 2)}%`, 1.6, 0, 2);
     writer.addText('BT_FRAME', titleX1 + 72, titleY2 - 39, `ESTADO: ${summary.status}`, 1.6, 0, 7);
     writer.addText('BT_FRAME', titleX1 + 72, titleY2 - 44, `FECHA: ${new Date().toLocaleDateString('es-PE')}`, 1.6, 0, 7);
-    writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 53, 'ORIGEN UTM', 1.4, 0, 7);
-    writer.addText('BT_FRAME', titleX1 + 28, titleY2 - 53, `E ${fmt(origin.x, 2)} / N ${fmt(origin.y, 2)} / Z ${zone}${hemisphere}`, 1.4, 0, 7);
+    writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 53, 'SISTEMA CRS', 1.4, 0, 7);
+    writer.addText('BT_FRAME', titleX1 + 30, titleY2 - 53, `WGS84 / UTM ${zone}${hemisphere} / EPSG:${summary.epsg}`, 1.4, 0, 7);
     writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 59, 'NOTA', 1.4, 0, 7);
-    writer.addText('BT_FRAME', titleX1 + 18, titleY2 - 59, 'PLANO TRASLADADO AL ORIGEN LOCAL', 1.4, 0, 8);
+    writer.addText('BT_FRAME', titleX1 + 18, titleY2 - 59, `COORDENADAS UTM REALES EN METROS: E ${fmt(center.x, 2)} / N ${fmt(center.y, 2)}`, 1.4, 0, 8);
 
     writer.addLine('BT_FRAME', titleX1, titleY2 - 66, titleX2, titleY2 - 66, 7);
     writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 71, 'RESUMEN TECNICO', 1.7, 0, 7);
@@ -1542,15 +1841,21 @@
     writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 81, `UNIDADES POSTE: ${summary.totalPoleUnits} | SUMINISTROS: ${summary.totalSupplyCount}`, 1.4, 0, 7);
     writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 86, `CIRCUITOS: ${summary.totalCircuitCount} | CABLE: ${fmt(summary.cableKm, 3)} km`, 1.4, 0, 7);
     writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 91, `CAIDA: ${fmt(summary.dropPct, 2)}% | ESTADO: ${summary.status}`, 1.4, 0, summary.status === 'APTO' ? 3 : 2);
+    writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 96, `RETENIDAS: ${summary.totalRetenidaCount} | PAT: ${summary.totalPatCount}`, 1.4, 0, 7);
+    writer.addText('BT_FRAME', titleX1 + 4, titleY2 - 101, `ATERRADOS: ${summary.totalPoleGroundCount} | VIAS: ${summary.totalRoadCount} | CURVAS: ${summary.totalContourCount}`, 1.4, 0, 7);
 
-    writer.addLine('BT_FRAME', titleX1, titleY1 + 16, titleX2, titleY1 + 16, 7);
-    writer.addText('BT_FRAME', titleX1 + 4, titleY1 + 11, 'LEYENDA', 1.8, 0, 7);
-    writer.addLegendItem('BT_FRAME', titleX1 + 4, titleY1 + 6, 'Transformador', 'BT_TRAFO', 1);
-    writer.addLegendItem('BT_FRAME', titleX1 + 4, titleY1 + 1, 'Lineas BT', 'BT_LINEAS_AEREAS', 5);
-    writer.addLegendItem('BT_FRAME', titleX1 + 62, titleY1 + 6, 'Postes BT', 'BT_POSTES', 30);
-    writer.addLegendItem('BT_FRAME', titleX1 + 62, titleY1 + 1, 'Suministros', 'BT_SUMINISTROS', 4);
-    addNorthArrow(writer, titleX2 - 14, titleY1 + 5, 10, 'BT_FRAME', 7);
-    addScaleBar(writer, titleX1 + 4, titleY1 - 4, 60, 6, 'BT_FRAME', 7);
+    writer.addLine('BT_FRAME', titleX1, titleY1 + 34, titleX2, titleY1 + 34, 7);
+    writer.addText('BT_FRAME', titleX1 + 4, titleY1 + 29, 'LEYENDA', 1.8, 0, 7);
+    writer.addLegendItem('BT_FRAME', titleX1 + 4, titleY1 + 24, 'Transformador', 'BT_TRAFO', 1);
+    writer.addLegendItem('BT_FRAME', titleX1 + 4, titleY1 + 19, 'Lineas BT', 'BT_LINEAS_AEREAS', 5);
+    writer.addLegendItem('BT_FRAME', titleX1 + 4, titleY1 + 14, 'Postes BT', 'BT_POSTES', 30);
+    writer.addLegendItem('BT_FRAME', titleX1 + 4, titleY1 + 9, 'Suministros', 'BT_SUMINISTROS', 4);
+    writer.addLegendItem('BT_FRAME', titleX1 + 62, titleY1 + 24, 'Retenidas', 'BT_RETENIDAS', 2);
+    writer.addLegendItem('BT_FRAME', titleX1 + 62, titleY1 + 19, 'Puesta Tierra', 'BT_PUESTA_TIERRA', 3);
+    writer.addLegendItem('BT_FRAME', titleX1 + 62, titleY1 + 14, 'Vanos', 'BT_VANOS', 8);
+    writer.addLegendItem('BT_FRAME', titleX1 + 62, titleY1 + 9, 'Carreteras / Curvas', 'BASE_CARRETERAS', 9);
+    addNorthArrow(writer, titleX2 - 14, titleY1 + 10, 10, 'BT_FRAME', 7);
+    addScaleBar(writer, titleX1 + 4, titleY1 + 2, 60, 6, 'BT_FRAME', 7);
 
     const outerMinX = Math.min(writer.bounds.minX, titleX1) - 12;
     const outerMinY = Math.min(writer.bounds.minY, titleY1 - 12) - 12;
@@ -1570,15 +1875,51 @@
       queryArcgis(24, whereEquals('SUM_COD_SED', codigoSED), true),
       queryArcgis(25, whereEquals('SAL_COD_SED', codigoSED), true),
       queryArcgis(27, whereEquals('NOD_COD_SED', codigoSED), true),
+      queryArcgis(28, whereEquals('RET_COD_SED', codigoSED), true),
+      queryArcgis(29, whereEquals('PAT_COD_SED', codigoSED), true),
       queryArcgis(33, whereEquals('TBT_COD_SED', codigoSED), true)
     ]);
 
-    return {
+    const baseData = {
       subestacion: queries[0] || [],
       suministros: queries[1] || [],
       circuitosBT: queries[2] || [],
       postesBT: queries[3] || [],
-      tramosBT: queries[4] || []
+      retenidasBT: queries[4] || [],
+      puestasTierraBT: queries[5] || [],
+      tramosBT: queries[6] || []
+    };
+
+    const contextBounds = expandLatLonBounds(collectNetworkLatLonBounds(baseData));
+    if (!contextBounds) {
+      return {
+        ...baseData,
+        carreteras: [],
+        curvasNivelPrimarias: [],
+        curvasNivelSecundarias: []
+      };
+    }
+
+    const geometry = envelopeFromLatLonBounds(contextBounds);
+    const [roadNac, roadDep, roadVec, contourPri, contourSec] = await Promise.allSettled([
+      queryArcgisFromBase(CARTO_BASE_URL, 4, '1=1', true, { geometry, maxFeatures: 350 }),
+      queryArcgisFromBase(CARTO_BASE_URL, 5, '1=1', true, { geometry, maxFeatures: 350 }),
+      queryArcgisFromBase(CARTO_BASE_URL, 6, '1=1', true, { geometry, maxFeatures: 350 }),
+      queryArcgisFromBase(CARTO_BASE_URL, 9, '1=1', true, { geometry, maxFeatures: 350 }),
+      queryArcgisFromBase(CARTO_BASE_URL, 10, '1=1', true, { geometry, maxFeatures: 350 })
+    ]);
+
+    const settledFeatures = (result) => (result.status === 'fulfilled' ? result.value || [] : []);
+
+    return {
+      ...baseData,
+      carreteras: [
+        ...settledFeatures(roadNac).map((feature) => ({ ...feature, __tipoContexto: 'Nacional' })),
+        ...settledFeatures(roadDep).map((feature) => ({ ...feature, __tipoContexto: 'Departamental' })),
+        ...settledFeatures(roadVec).map((feature) => ({ ...feature, __tipoContexto: 'Vecinal' }))
+      ],
+      curvasNivelPrimarias: settledFeatures(contourPri).map((feature) => ({ ...feature, __tipoContexto: 'Primaria' })),
+      curvasNivelSecundarias: settledFeatures(contourSec).map((feature) => ({ ...feature, __tipoContexto: 'Secundaria' }))
     };
   }
 
