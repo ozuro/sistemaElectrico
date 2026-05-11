@@ -7,6 +7,16 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
   <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script>
+    if (!window.THREE) {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"><\/script>');
+    }
+  </script>
+  <script>
+    if (window.THREE && !THREE.OrbitControls) {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"><\/script>');
+    }
+  </script>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
   <style>
     html, body {
@@ -135,14 +145,23 @@
     }
     
     #view3D {
-      position: absolute;
+      position: fixed;
       top: 0;
       left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 1000;
+      width: 100vw;
+      height: 100vh;
+      z-index: 3000;
       display: none;
-      background: linear-gradient(135deg, #87CEEB 0%, #98D8E8 100%);
+      overflow: hidden;
+      background: #9fd6f0;
+    }
+
+    #view3D canvas {
+      position: absolute;
+      inset: 0;
+      width: 100% !important;
+      height: 100% !important;
+      z-index: 0;
     }
     
     #view3DControls {
@@ -154,6 +173,9 @@
       color: white;
       padding: 20px;
       border-radius: 15px;
+      max-width: 330px;
+      max-height: calc(100vh - 40px);
+      overflow: auto;
       backdrop-filter: blur(10px);
       box-shadow: 0 8px 25px rgba(0,0,0,0.3);
     }
@@ -294,7 +316,7 @@
       display: none;
       justify-content: center;
       align-items: center;
-      z-index: 2000;
+      z-index: 3900;
     }
     
     .loading-spinner {
@@ -374,7 +396,7 @@
       padding: 15px 20px;
       border-radius: 8px;
       box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-      z-index: 3000;
+      z-index: 4100;
       display: none;
       animation: slideIn 0.3s ease;
     }
@@ -401,7 +423,7 @@
       color: white;
       padding: 20px 30px;
       border-radius: 10px;
-      z-index: 2001;
+      z-index: 4050;
       display: none;
     }
   </style>
@@ -468,6 +490,10 @@
 
     <button onclick="generarReporteDXF()" class="btn-warning" title="Exportar el circuito seleccionado a DXF georreferenciado">
       <i class="fas fa-file-code"></i> DXF
+    </button>
+
+    <button onclick="generarReporteKMZ()" class="btn-warning" title="Exportar modelo KML/KMZ para Google Earth">
+      <i class="fas fa-globe-americas"></i> KMZ
     </button>
     
     <input type="file" id="inputArchivo" accept=".csv" onchange="cargarDesdeExcel()" title="Cargar archivo CSV">
@@ -540,6 +566,26 @@
       <button onclick="refrescarSistema3D()" style="margin-bottom: 15px; background: #0d6efd;">
         <i class="fas fa-sync-alt"></i> Refrescar
       </button>
+      <div style="margin-bottom: 10px;">
+        <strong><i class="fas fa-layer-group"></i> Base 3D</strong>
+      </div>
+      <label style="display:block; margin-bottom: 6px;">
+        <input type="checkbox" id="toggleSatellite3D" checked onchange="actualizarCapasBase3D(false)">
+        Satelite
+      </label>
+      <label style="display:block; margin-bottom: 6px;">
+        <input type="checkbox" id="toggleRelief3D" checked onchange="actualizarCapasBase3D(true)">
+        Relieve
+      </label>
+      <label style="display:block; margin-bottom: 10px;">
+        <input type="checkbox" id="toggleRoads3D" checked onchange="actualizarCapasBase3D(false)">
+        Carreteras
+      </label>
+      <select id="selectElevationScale3D" onchange="actualizarCapasBase3D(true)" style="width: 100%; margin-bottom: 15px;">
+        <option value="1">Elevacion 1x</option>
+        <option value="2" selected>Elevacion 2x</option>
+        <option value="3">Elevacion 3x</option>
+      </select>
       <div style="margin-bottom: 10px;"><i class="fas fa-sitemap"></i> Sistema: <span id="current3DSystem">sin carga</span></div>
       <div style="margin-bottom: 10px;"><i class="fas fa-mouse"></i> Arrastra para rotar</div>
       <div style="margin-bottom: 10px;"><i class="fas fa-scroll"></i> Scroll para zoom</div>
@@ -553,6 +599,8 @@
       <div><i class="fas fa-anchor"></i> Retenidas: <span id="countRetenidas3D">0</span></div>
       <div><i class="fas fa-magnet"></i> Puestas a tierra: <span id="countPat3D">0</span></div>
       <div><i class="fas fa-home"></i> Suministros: <span id="countSupplies3D">0</span></div>
+      <div><i class="fas fa-road"></i> Carreteras: <span id="countRoads3D">0</span></div>
+      <div><i class="fas fa-mountain"></i> Curvas: <span id="countContours3D">0</span></div>
     </div>
   </div>
 
@@ -567,6 +615,10 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="assets/js/3d/core/red3d-utils.js"></script>
+  <script src="assets/js/3d/objects/electrical-objects.js"></script>
+  <script src="assets/js/3d/layers/base-context-service.js"></script>
+  <script src="assets/js/3d/layers/base-terrain-layer.js"></script>
   <script>
     // Inicialización del mapa
     const map = L.map('map').setView([-15.55, -69.97], 13);
@@ -574,6 +626,9 @@
     // Variables globales para 3D y Street View
     let scene, camera, renderer, controls;
     let system3DRoot = null;
+    let fallbackGround3D = null;
+    let fallbackGrid3D = null;
+    let capaBase3DActual = null;
     let transformadores3D = [];
     let postes3D = [];
     let circuitos3D = [];
@@ -587,6 +642,7 @@
     let sistema3DActual = null;
     let sistema3DEnCarga = false;
     let sistema3DCargaPromise = null;
+    let animacion3DActiva = false;
     let streetViewActive = false;
     let streetViewMarkers = [];
 
@@ -1530,6 +1586,9 @@
               </button>
               <button onclick="generarReporteDXF('${id}')" class="btn-popup-info">
                 <i class="fas fa-file-code"></i> Reporte DXF
+              </button>
+              <button onclick="generarReporteKMZ('${id}')" class="btn-popup-info">
+                <i class="fas fa-globe-americas"></i> Reporte KMZ
               </button>
             </div>
           `;
@@ -2897,6 +2956,91 @@
     const DEFAULT_AERIAL_HEIGHT = 6.2;
     const DEFAULT_SUBTER_HEIGHT = -0.35;
 
+    function normalize3DCode(value) {
+      return normalizarTexto(value).replace(/\s+/g, '');
+    }
+
+    function clean3DText(value, fallback = 'N/A', maxLength = 42) {
+      const text = String(value ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!text || text === 'N/A') return fallback;
+      return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}…` : text;
+    }
+
+    function angleFromAttrs3D(attrs, fields, fallback = 45) {
+      for (const field of fields || []) {
+        const value = attrs?.[field];
+        if (value === undefined || value === null || value === '') continue;
+        const parsed = parseMetricNumber(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return fallback;
+    }
+
+    function getPoleHeight3D(attrs) {
+      return Math.max(5.8, Math.min(13, parseMetricNumber(getValue(attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT));
+    }
+
+    function getPoleMaterialInfo(attrs) {
+      const code = normalize3DCode(getValue(attrs, ['NOD_COD_MAT_SPT'], ''));
+      return {
+        code,
+        label: getMaterialSoporte(code || 'N/A'),
+        color: materialColorForPole(attrs),
+        isWood: code === 'MA',
+        isConcrete: code === 'CO' || code === 'HO',
+        isSteel: code === 'FI' || code === 'FG' || code === 'FN' || code === 'RI'
+      };
+    }
+
+    function createCylinderBetween(start, end, radius, material, radialSegments = 8) {
+      const direction = end.clone().sub(start);
+      const length = direction.length();
+      if (!Number.isFinite(length) || length <= 0.001) return null;
+      const geometry = new THREE.CylinderGeometry(radius, radius, length, radialSegments);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.copy(start).add(end).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    function addMeshIfValid(group, mesh) {
+      if (mesh) group.add(mesh);
+      return mesh;
+    }
+
+    function getFirstLatLngFromGeometry(geometry) {
+      return pointToLatLng(geometry) || pathsToLatLngs(geometry)?.[0]?.[0] || null;
+    }
+
+    function getSystemOriginLatLng3D(data) {
+      return pointToLatLng(data.subestacion?.geometry)
+        || getFirstLatLngFromGeometry(data.circuitosBT?.[0]?.geometry)
+        || getFirstLatLngFromGeometry(data.postesBT?.[0]?.geometry)
+        || getFirstLatLngFromGeometry(data.tramosBT?.[0]?.geometry)
+        || getFirstLatLngFromGeometry(data.suministros?.[0]?.geometry)
+        || getFirstLatLngFromGeometry(data.retenidasBT?.[0]?.geometry)
+        || getFirstLatLngFromGeometry(data.puestasTierraBT?.[0]?.geometry)
+        || null;
+    }
+
+    function show3DNotice(lines, options = {}) {
+      if (!system3DRoot) return null;
+      clear3DScene();
+      const label = createLabelSprite(lines, {
+        fontSize: options.fontSize || 18,
+        scale: options.scale || 1.2,
+        background: options.background || 'rgba(20, 30, 38, 0.82)'
+      });
+      label.position.set(0, options.y || 7, 0);
+      register3DObject(label);
+      frameCameraToSystem();
+      return label;
+    }
+
     function getSelected3DCode() {
       return String(transformadorSeleccionado || window.transformadorSeleccionado || document.getElementById('inputID').value || '').trim();
     }
@@ -2928,6 +3072,8 @@
       [transformadores3D, postes3D, circuitos3D, suministros3D, lineas3D, armados3D, retenidas3D, pat3D, vanos3D, elementos3D].forEach((collection) => {
         collection.length = 0;
       });
+      capaBase3DActual = null;
+      setFallbackBaseVisibility3D(true);
     }
 
     function register3DObject(object3D, bucket) {
@@ -2958,6 +3104,95 @@
       const [lat, lng] = latlng;
       const p = latLngToLocal3D(lat, lng, origin);
       return new THREE.Vector3(p.x, y, p.z);
+    }
+
+    function localToLatLng3D(x, z, origin) {
+      return {
+        lat: origin.lat + (z / (metersPerDegreeLat(origin.lat) * WORLD_SCALE_3D)),
+        lng: origin.lng + (x / (metersPerDegreeLon(origin.lat) * WORLD_SCALE_3D))
+      };
+    }
+
+    function getOpcionesCapasBase3D() {
+      return {
+        satelliteEnabled: document.getElementById('toggleSatellite3D')?.checked !== false,
+        reliefEnabled: document.getElementById('toggleRelief3D')?.checked !== false,
+        roadsEnabled: document.getElementById('toggleRoads3D')?.checked !== false,
+        elevationScale: parseMetricNumber(document.getElementById('selectElevationScale3D')?.value || 1) || 1
+      };
+    }
+
+    function createLocalBounds3D(data, origin) {
+      const bounds = {
+        minX: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        minZ: Number.POSITIVE_INFINITY,
+        maxZ: Number.NEGATIVE_INFINITY
+      };
+
+      function trackLocal(x, z) {
+        if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+        bounds.minX = Math.min(bounds.minX, x);
+        bounds.maxX = Math.max(bounds.maxX, x);
+        bounds.minZ = Math.min(bounds.minZ, z);
+        bounds.maxZ = Math.max(bounds.maxZ, z);
+      }
+
+      function trackLatLng(latlng) {
+        if (!latlng) return;
+        const p = latLngToLocal3D(latlng[0], latlng[1], origin);
+        trackLocal(p.x, p.z);
+      }
+
+      function trackFeature(feature) {
+        trackLatLng(pointToLatLng(feature?.geometry));
+        pathsToLatLngs(feature?.geometry).forEach((path) => {
+          path.forEach((latlng) => trackLatLng(latlng));
+        });
+      }
+
+      [
+        data.subestacion,
+        ...(data.suministros || []),
+        ...(data.circuitosBT || []),
+        ...(data.postesBT || []),
+        ...(data.tramosBT || []),
+        ...(data.retenidasBT || []),
+        ...(data.puestasTierraBT || []),
+        ...(data.carreteras || []),
+        ...(data.curvasNivelPrimarias || []),
+        ...(data.curvasNivelSecundarias || [])
+      ].filter(Boolean).forEach(trackFeature);
+
+      trackLocal(0, 0);
+
+      if (!Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minZ)) {
+        return { minX: -80, maxX: 80, minZ: -80, maxZ: 80 };
+      }
+
+      return bounds;
+    }
+
+    function setFallbackBaseVisibility3D(visible) {
+      if (fallbackGround3D) fallbackGround3D.visible = visible;
+      if (fallbackGrid3D) fallbackGrid3D.visible = visible;
+    }
+
+    async function actualizarCapasBase3D(rebuildTerrain = false) {
+      if (!scene || !sistema3DActual) return;
+
+      if (rebuildTerrain) {
+        await cargarSistema3DActivo(true);
+        start3DAnimation();
+        return;
+      }
+
+      const options = getOpcionesCapasBase3D();
+      if (capaBase3DActual) {
+        capaBase3DActual.updateVisibility(options);
+        sistema3DActual.baseOptions = options;
+      }
+      start3DAnimation();
     }
 
     function createLabelSprite(lines, options = {}) {
@@ -3004,6 +3239,7 @@
       const sprite = new THREE.Sprite(material);
       const scale = options.scale || 1;
       sprite.scale.set((canvas.width / 12) * scale, (canvas.height / 12) * scale, 1);
+      sprite.userData.kind = 'label';
       sprite.userData.texture = texture;
       return sprite;
     }
@@ -3013,10 +3249,11 @@
       for (let i = 1; i <= 4; i += 1) {
         const sufijo = String(i).padStart(2, '0');
         const codigo = String(getValue(attrs, [`NOD_COD_TIP_ARM_${sufijo}`], '')).trim();
-        if (!codigo || codigo === 'N/A') continue;
+        const normalized = normalize3DCode(codigo);
+        if (!codigo || normalized === 'N/A' || normalized === 'NN' || normalized === '0') continue;
         armados.push({
           codigo,
-          descripcion: getValue(attrs, [`NOD_DSC_TIP_ARM_${sufijo}`], ''),
+          descripcion: clean3DText(getValue(attrs, [`NOD_DSC_TIP_ARM_${sufijo}`], ''), ''),
           cantidad: parseMetricNumber(getValue(attrs, [`NOD_CNT_TIP_ARM_${sufijo}`], 0)) || 1
         });
       }
@@ -3024,7 +3261,7 @@
     }
 
     function materialColorForPole(attrs) {
-      switch (attrs?.NOD_COD_MAT_SPT) {
+      switch (normalize3DCode(getValue(attrs, ['NOD_COD_MAT_SPT'], ''))) {
         case 'CO': return 0xb5b5b5;
         case 'FI': return 0xf7b48b;
         case 'FG': return 0xd66b6b;
@@ -3072,6 +3309,31 @@
       return best?.angle ?? 0;
     }
 
+    function computeSystemBounds3D(root) {
+      const box = new THREE.Box3();
+      if (!root) return box;
+
+      root.updateWorldMatrix(true, true);
+      root.traverse((node) => {
+        if (!node.isMesh && !node.isLine && !node.isPoints) return;
+        if (node.userData?.kind === 'label' || node.userData?.excludeFromBounds) return;
+        if (!node.geometry) return;
+        if (!node.geometry.boundingBox) {
+          node.geometry.computeBoundingBox();
+        }
+        if (!node.geometry.boundingBox) return;
+        const geometryBox = node.geometry.boundingBox.clone();
+        geometryBox.applyMatrix4(node.matrixWorld);
+        box.union(geometryBox);
+      });
+
+      if (box.isEmpty()) {
+        box.setFromObject(root);
+      }
+
+      return box;
+    }
+
     function createCableSpan(start, end, options = {}) {
       const color = options.color || 0x333333;
       const radius = options.radius || 0.045;
@@ -3097,28 +3359,55 @@
     }
 
     function createTransformer3D(point, attrs, codigo) {
+      if (window.Red3DObjects?.createMtSubstation) {
+        return window.Red3DObjects.createMtSubstation({
+          THREE,
+          point,
+          attrs,
+          code: codigo,
+          getValue,
+          cleanText: clean3DText,
+          createLabelSprite: (lines, labelOptions) => createLabelSprite(lines, labelOptions)
+        });
+      }
+
       const group = new THREE.Group();
-      group.position.set(point.x, 0, point.z);
+      group.position.set(point.x, point.y || 0, point.z);
       group.userData = { type: 'transformer', name: codigo };
 
       const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x6d7278, roughness: 0.55, metalness: 0.25 });
       const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.4, metalness: 0.1 });
       const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.9, metalness: 0.05 });
+      const steelMaterial = new THREE.MeshStandardMaterial({ color: 0x3f4750, roughness: 0.58, metalness: 0.28 });
+
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.18, 3.7), new THREE.MeshStandardMaterial({ color: 0x56615a, roughness: 0.95, metalness: 0.02 }));
+      pad.position.y = 0.09;
+      pad.receiveShadow = true;
+      group.add(pad);
 
       const base = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.55, 2.8), darkMaterial);
-      base.position.y = 0.27;
+      base.position.y = 0.45;
       base.castShadow = true;
       group.add(base);
 
       const tank = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.65, 2.2), bodyMaterial);
-      tank.position.y = 1.3;
+      tank.position.y = 1.48;
       tank.castShadow = true;
       group.add(tank);
 
       const top = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.45, 1.4), accentMaterial);
-      top.position.y = 2.45;
+      top.position.y = 2.63;
       top.castShadow = true;
       group.add(top);
+
+      [-1.65, 1.65].forEach((x) => {
+        const post = createCylinderBetween(new THREE.Vector3(x, 0.18, -1.55), new THREE.Vector3(x, 4.2, -1.55), 0.08, steelMaterial, 8);
+        addMeshIfValid(group, post);
+      });
+      const crossbar = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.16, 0.16), steelMaterial);
+      crossbar.position.set(0, 3.95, -1.55);
+      crossbar.castShadow = true;
+      group.add(crossbar);
 
       const bushings = [
         [-1.0, 2.9, -0.55],
@@ -3127,28 +3416,39 @@
       ];
       bushings.forEach(([x, y, z]) => {
         const bushing = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.8, 8), darkMaterial);
-        bushing.position.set(x, y, z);
+        bushing.position.set(x, y + 0.18, z);
         bushing.rotation.z = Math.PI / 2;
         bushing.castShadow = true;
         group.add(bushing);
+
+        const arrester = createCylinderBetween(new THREE.Vector3(x, 3.15, -1.55), new THREE.Vector3(x, 3.8, -1.55), 0.045, accentMaterial, 8);
+        addMeshIfValid(group, arrester);
       });
 
       const radiatorMaterial = new THREE.MeshStandardMaterial({ color: 0x50555b, roughness: 0.9, metalness: 0.08 });
       for (let i = -1; i <= 1; i += 1) {
         const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.2, 1.8), radiatorMaterial);
-        fin.position.set(1.9, 1.5, i * 0.7);
+        fin.position.set(1.9, 1.68, i * 0.7);
         fin.castShadow = true;
         group.add(fin);
       }
 
+      const tablero = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.1, 0.18), darkMaterial);
+      tablero.position.set(-2.55, 1.3, 0.65);
+      tablero.castShadow = true;
+      group.add(tablero);
+
+      const power = clean3DText(getValue(attrs, ['SED_POT_INST', 'SED_POT_SED', 'SED_POT_NOM'], 'N/A'), 'N/A', 18);
+      const voltage = clean3DText(getValue(attrs, ['SED_TEN_NOM_PRI', 'SED_TEN_PRI'], 'N/A'), 'N/A', 18);
       const label = createLabelSprite([
         `${codigo}`,
-        `${getValue(attrs, ['SED_POT_INST', 'SED_POT_SED', 'SED_POT_NOM'], 'N/A')} kVA`
+        clean3DText(getValue(attrs, ['SED_NOM_SED'], 'Subestación'), 'Subestación', 30),
+        `${power} kVA | ${voltage} kV`
       ], {
         fontSize: 16,
-        scale: 0.85
+        scale: 0.82
       });
-      label.position.set(0, 4.1, 0);
+      label.position.set(0, 5.05, 0);
       group.add(label);
 
       return group;
@@ -3156,7 +3456,7 @@
 
     function createPole3D(point, attrs, headingRad, codigo) {
       const group = new THREE.Group();
-      group.position.set(point.x, 0, point.z);
+      group.position.set(point.x, point.y || 0, point.z);
       group.rotation.y = headingRad;
       group.userData = {
         type: 'pole',
@@ -3164,33 +3464,81 @@
         armados: extractArmados(attrs)
       };
 
-      const height = Math.max(5.8, Math.min(13, parseMetricNumber(getValue(attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT));
+      const height = getPoleHeight3D(attrs);
+      const materialInfo = getPoleMaterialInfo(attrs);
+      const tipoSoporte = normalize3DCode(getValue(attrs, ['NOD_COD_TIP_SPT'], ''));
+      const cantidadSoportes = parseMetricNumber(getValue(attrs, ['NOD_CNT_SPT'], 0));
+      const supportCount = Math.max(1, Math.min(2, Math.round(cantidadSoportes || (tipoSoporte === 'BIP' ? 2 : 1))));
+      const supportOffsets = supportCount === 2 ? [-0.42, 0.42] : [0];
       const poleMaterial = new THREE.MeshStandardMaterial({
-        color: materialColorForPole(attrs),
+        color: materialInfo.color,
         roughness: 0.92,
-        metalness: 0.03
+        metalness: materialInfo.isSteel ? 0.22 : 0.03
       });
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, height, 10), poleMaterial);
-      pole.position.y = height / 2;
-      pole.castShadow = true;
-      group.add(pole);
+      const ringMaterial = new THREE.MeshStandardMaterial({ color: 0x4b2a16, roughness: 0.96, metalness: 0.01 });
+      const collarMaterial = new THREE.MeshStandardMaterial({ color: 0x777f86, roughness: 0.86, metalness: 0.05 });
+      const steelDark = new THREE.MeshStandardMaterial({ color: 0x2f353b, roughness: 0.58, metalness: 0.35 });
 
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), poleMaterial);
-      cap.position.y = height + 0.05;
-      cap.castShadow = true;
-      group.add(cap);
+      supportOffsets.forEach((offsetX) => {
+        const topRadius = materialInfo.isWood ? 0.13 : materialInfo.isSteel ? 0.11 : 0.15;
+        const bottomRadius = materialInfo.isWood ? 0.22 : materialInfo.isSteel ? 0.14 : 0.2;
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(topRadius, bottomRadius, height, materialInfo.isSteel ? 8 : 12), poleMaterial);
+        pole.position.set(offsetX, height / 2, 0);
+        pole.castShadow = true;
+        pole.receiveShadow = true;
+        group.add(pole);
+
+        if (materialInfo.isWood) {
+          for (let y = 0.9; y < height - 0.4; y += 1.15) {
+            const band = new THREE.Mesh(new THREE.CylinderGeometry(bottomRadius * 0.88, bottomRadius * 0.78, 0.026, 12), ringMaterial);
+            band.position.set(offsetX, y, 0);
+            band.castShadow = true;
+            group.add(band);
+          }
+        } else if (materialInfo.isConcrete) {
+          const baseCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 0.55, 12), collarMaterial);
+          baseCollar.position.set(offsetX, 0.28, 0);
+          baseCollar.castShadow = true;
+          group.add(baseCollar);
+        } else if (materialInfo.isSteel) {
+          [-0.13, 0.13].forEach((z) => {
+            const rail = createCylinderBetween(new THREE.Vector3(offsetX, 0.35, z), new THREE.Vector3(offsetX, height - 0.2, z), 0.025, steelDark, 6);
+            addMeshIfValid(group, rail);
+          });
+        }
+
+        const cap = new THREE.Mesh(new THREE.SphereGeometry(materialInfo.isSteel ? 0.09 : 0.12, 8, 8), poleMaterial);
+        cap.position.set(offsetX, height + 0.05, 0);
+        cap.castShadow = true;
+        group.add(cap);
+      });
+
+      if (supportCount === 2) {
+        [height * 0.35, height * 0.62].forEach((y) => {
+          const spacer = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.12, 0.16), steelDark);
+          spacer.position.set(0, y, 0);
+          spacer.castShadow = true;
+          group.add(spacer);
+        });
+      }
 
       const armados = extractArmados(attrs);
       const armBase = height * 0.78;
       const armMaterial = new THREE.MeshStandardMaterial({ color: 0x4d545a, roughness: 0.55, metalness: 0.3 });
       const insulatorMaterial = new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.35, metalness: 0.05 });
+      const cableDropMaterial = new THREE.MeshStandardMaterial({ color: 0x1c1f22, roughness: 0.7, metalness: 0.15 });
+      const serviceBoxMaterial = new THREE.MeshStandardMaterial({ color: 0xf0b84a, roughness: 0.58, metalness: 0.08 });
 
       if (!armados.length) {
         armados.push({ codigo: 'STD', descripcion: 'Estructura', cantidad: 1 });
       }
 
-      armados.forEach((armado, index) => {
-        const armWidth = 2.2 + Math.min(armado.cantidad, 4) * 0.38;
+      armados.slice(0, 4).forEach((armado, index) => {
+        const codeNorm = normalize3DCode(armado.codigo);
+        const isService = /SER|AC|SUM/.test(codeNorm);
+        const isRetainedArm = /RET|RP|ANCL|ANC/.test(codeNorm);
+        const hasAp = /AP|ALUM/.test(codeNorm) || /ALUMBR/i.test(armado.descripcion || '');
+        const armWidth = (isService ? 1.45 : 2.2) + Math.min(armado.cantidad, 4) * 0.34 + (isRetainedArm ? 0.35 : 0);
         const y = armBase - index * 0.55;
         const beam = new THREE.Mesh(new THREE.BoxGeometry(armWidth, 0.14, 0.18), armMaterial);
         beam.position.set(0, y, 0);
@@ -3203,23 +3551,71 @@
         brace.castShadow = true;
         group.add(brace);
 
-        const endLeft = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), insulatorMaterial);
-        endLeft.position.set(-armWidth / 2, y, 0);
-        endLeft.castShadow = true;
-        group.add(endLeft);
+        const insulatorCount = isService ? 1 : Math.max(2, Math.min(3, Math.round(armado.cantidad) || 3));
+        for (let i = 0; i < insulatorCount; i += 1) {
+          const x = insulatorCount === 1 ? armWidth / 2 : -armWidth / 2 + (armWidth / (insulatorCount - 1)) * i;
+          const insulator = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.38, 8), insulatorMaterial);
+          insulator.position.set(x, y + 0.2, 0);
+          insulator.castShadow = true;
+          group.add(insulator);
+        }
 
-        const endRight = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), insulatorMaterial);
-        endRight.position.set(armWidth / 2, y, 0);
-        endRight.castShadow = true;
-        group.add(endRight);
+        if (isRetainedArm) {
+          const diagonal = createCylinderBetween(new THREE.Vector3(-armWidth * 0.35, y - 0.65, 0), new THREE.Vector3(armWidth * 0.45, y + 0.08, 0), 0.035, armMaterial, 6);
+          addMeshIfValid(group, diagonal);
+        }
+
+        if (isService) {
+          const serviceBox = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.42, 0.18), serviceBoxMaterial);
+          serviceBox.position.set(0.42, y - 0.35, 0.17);
+          serviceBox.castShadow = true;
+          group.add(serviceBox);
+          const drop = createCylinderBetween(new THREE.Vector3(armWidth / 2, y + 0.15, 0), new THREE.Vector3(0.42, Math.max(2.2, y - 1.7), 0.12), 0.018, cableDropMaterial, 6);
+          addMeshIfValid(group, drop);
+        }
+
+        if (hasAp) {
+          const lampArm = createCylinderBetween(new THREE.Vector3(0.35, y - 0.05, 0), new THREE.Vector3(1.45, y - 0.22, 0.35), 0.035, armMaterial, 6);
+          addMeshIfValid(group, lampArm);
+          const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), new THREE.MeshStandardMaterial({ color: 0xffdf7e, roughness: 0.35, metalness: 0.05 }));
+          lamp.position.set(1.62, y - 0.26, 0.42);
+          lamp.castShadow = true;
+          group.add(lamp);
+        }
       });
+
+      if (tieneBanderaSi(attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER'])) {
+        const x = supportOffsets[supportOffsets.length - 1] + 0.2;
+        const down = createCylinderBetween(new THREE.Vector3(x, height * 0.68, 0.05), new THREE.Vector3(x, 0.18, 0.05), 0.018, new THREE.MeshStandardMaterial({ color: 0x2f8f45, roughness: 0.8, metalness: 0.08 }), 6);
+        addMeshIfValid(group, down);
+        [0.48, 0.32, 0.18].forEach((w, idx) => {
+          const bar = createCylinderBetween(new THREE.Vector3(-w, 0.08 - idx * 0.06, 0.42), new THREE.Vector3(w, 0.08 - idx * 0.06, 0.42), 0.014, new THREE.MeshStandardMaterial({ color: 0x2f8f45, roughness: 0.8, metalness: 0.08 }), 5);
+          addMeshIfValid(group, bar);
+        });
+      }
+
+      const armadoTexto = armados
+        .slice(0, 3)
+        .map((armado) => `${clean3DText(armado.codigo, 'STD', 12)} x${armado.cantidad}`)
+        .join(' / ');
+      const label = createLabelSprite([
+        `Poste ${clean3DText(codigo, 'N/A', 16)}`,
+        `${materialInfo.label} | ${redondear(height, 1)} m`,
+        `Arm. ${clean3DText(armadoTexto, 'STD', 34)}`
+      ], {
+        fontSize: 13,
+        scale: 0.72,
+        background: materialInfo.isWood ? 'rgba(70, 40, 18, 0.78)' : 'rgba(20, 30, 38, 0.78)'
+      });
+      label.position.set(0, height + 1.25, 0);
+      group.add(label);
 
       return group;
     }
 
     function createSupply3D(point, attrs, codigo) {
       const group = new THREE.Group();
-      group.position.set(point.x, 0, point.z);
+      group.position.set(point.x, point.y || 0, point.z);
       group.userData = { type: 'supply', name: codigo };
 
       const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xd8b45d, roughness: 0.8, metalness: 0.05 });
@@ -3247,7 +3643,7 @@
 
     function createCircuit3D(point, attrs, codigo) {
       const group = new THREE.Group();
-      group.position.set(point.x, 0, point.z);
+      group.position.set(point.x, point.y || 0, point.z);
       group.userData = { type: 'circuit', name: codigo };
 
       const service = getTipoServicio(getValue(attrs, ['SAL_TIP_SRV'], 'N/A'));
@@ -3267,12 +3663,15 @@
 
     function createRetained3D(point, polePoint, attrs, codigo) {
       const group = new THREE.Group();
-      group.position.set(point.x, 0, point.z);
+      group.position.set(point.x, point.y || 0, point.z);
       group.userData = { type: 'retained', name: codigo };
 
       const steel = new THREE.MeshStandardMaterial({ color: 0x5e6670, roughness: 0.5, metalness: 0.35 });
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 1.2, 8), steel);
-      rod.position.y = 0.6;
+      const redGuard = new THREE.MeshStandardMaterial({ color: 0xb04343, roughness: 0.55, metalness: 0.08 });
+      const angle = angleFromAttrs3D(attrs, ['RET_ANG', 'RET_ANG_INC'], 45) * Math.PI / 180;
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 1.25, 8), steel);
+      rod.position.y = 0.62;
+      rod.rotation.z = -0.18;
       rod.castShadow = true;
       group.add(rod);
 
@@ -3282,27 +3681,51 @@
       anchor.castShadow = true;
       group.add(anchor);
 
-      if (polePoint) {
-        const top = polePoint.clone();
-        top.y += 0.15;
-        const tie = createCableSpan(top, new THREE.Vector3(point.x, 0.95, point.z), {
-          color: 0xb04343,
-          radius: 0.035,
-          type: 'A',
-          opacity: 0.95
-        });
-        register3DObject(tie, lineas3D);
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.08, 0.34), steel);
+      plate.position.set(0, 0.06, 0);
+      plate.rotation.y = angle;
+      plate.castShadow = true;
+      group.add(plate);
+
+      const targetTop = polePoint
+        ? polePoint.clone().add(new THREE.Vector3(0, 0.15, 0))
+        : new THREE.Vector3(point.x - Math.cos(angle) * 5.5, (point.y || 0) + 6.8, point.z - Math.sin(angle) * 5.5);
+      const anchorTop = new THREE.Vector3(point.x, (point.y || 0) + 1.03, point.z);
+      const tie = createCylinderBetween(targetTop, anchorTop, 0.026, steel, 8);
+      if (tie) register3DObject(tie, lineas3D);
+
+      const guardStart = anchorTop.clone().lerp(targetTop, 0.12);
+      const guardEnd = anchorTop.clone().lerp(targetTop, 0.32);
+      const guard = createCylinderBetween(guardStart, guardEnd, 0.05, redGuard, 8);
+      if (guard) register3DObject(guard, lineas3D);
+
+      if (!polePoint) {
+        const guide = createCylinderBetween(new THREE.Vector3(0, 0.4, 0), new THREE.Vector3(-Math.cos(angle) * 1.2, 2.2, -Math.sin(angle) * 1.2), 0.018, steel, 6);
+        addMeshIfValid(group, guide);
       }
+
+      const label = createLabelSprite([
+        `Retenida ${clean3DText(codigo, 'N/A', 14)}`,
+        `Tipo ${clean3DText(getValue(attrs, ['RET_TIP_RET', 'RET_TIP_SUJ'], 'N/A'), 'N/A', 18)}`,
+        `Poste ${clean3DText(getValue(attrs, ['RET_COD_NOD'], 'N/A'), 'N/A', 18)}`
+      ], {
+        fontSize: 13,
+        scale: 0.66,
+        background: 'rgba(83, 42, 42, 0.78)'
+      });
+      label.position.set(0, 2.15, 0);
+      group.add(label);
 
       return group;
     }
 
     function createPat3D(point, polePoint, attrs, codigo) {
       const group = new THREE.Group();
-      group.position.set(point.x, 0, point.z);
+      group.position.set(point.x, point.y || 0, point.z);
       group.userData = { type: 'pat', name: codigo };
 
       const earth = new THREE.MeshStandardMaterial({ color: 0x3b4f3a, roughness: 1, metalness: 0 });
+      const copper = new THREE.MeshStandardMaterial({ color: 0xb66f2a, roughness: 0.55, metalness: 0.35 });
       const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 1.1, 8), earth);
       rod.position.y = 0.55;
       rod.castShadow = true;
@@ -3320,6 +3743,7 @@
 
       const label = createLabelSprite([
         String(codigo || 'PAT'),
+        `Tipo ${clean3DText(getValue(attrs, ['PAT_TIP_PAT'], 'N/A'), 'N/A', 18)}`,
         `${redondear(parseMetricNumber(getValue(attrs, ['PAT_RES'], 0)), 2)} Ω`
       ], {
         fontSize: 14,
@@ -3329,34 +3753,37 @@
       group.add(label);
 
       if (polePoint) {
-        const connection = createCableSpan(polePoint.clone().add(new THREE.Vector3(0, 0.25, 0)), new THREE.Vector3(point.x, 0.2, point.z), {
-          color: 0x2f6c37,
-          radius: 0.02,
-          type: 'S',
-          opacity: 0.9
-        });
-        register3DObject(connection, lineas3D);
+        const connection = createCylinderBetween(polePoint.clone().add(new THREE.Vector3(0, 0.25, 0)), new THREE.Vector3(point.x, (point.y || 0) + 0.2, point.z), 0.018, copper, 6);
+        if (connection) register3DObject(connection, lineas3D);
       }
 
       return group;
     }
 
     function frameCameraToSystem() {
-      if (!system3DRoot || !camera || !controls) return;
-      const box = new THREE.Box3().setFromObject(system3DRoot);
+      if (!system3DRoot || !camera) return;
+      const box = computeSystemBounds3D(system3DRoot);
       if (box.isEmpty()) return;
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
       const maxSize = Math.max(size.x, size.y, size.z);
-      const distance = Math.max(35, maxSize * 1.45);
+      const distance = Math.max(35, Math.min(240, maxSize * 0.42));
       camera.near = 0.1;
       camera.far = Math.max(2000, distance * 20);
       camera.updateProjectionMatrix();
-      camera.position.set(center.x + distance, center.y + distance * 0.65 + 18, center.z + distance);
-      controls.target.copy(center);
-      controls.maxDistance = distance * 4;
-      controls.minDistance = Math.max(8, distance * 0.12);
-      controls.update();
+      camera.position.set(center.x + distance, center.y + distance * 0.6 + 12, center.z + distance);
+      if (controls) {
+        controls.target.copy(center);
+        controls.maxDistance = distance * 4;
+        controls.minDistance = Math.max(8, distance * 0.12);
+        controls.update();
+      } else {
+        camera.lookAt(center);
+      }
+      if (scene?.fog) {
+        scene.fog.near = distance * 1.8;
+        scene.fog.far = distance * 8;
+      }
     }
 
     function update3DStats(stats) {
@@ -3370,6 +3797,8 @@
       document.getElementById('countRetenidas3D').textContent = stats.retenidas;
       document.getElementById('countPat3D').textContent = stats.pat;
       document.getElementById('countSupplies3D').textContent = stats.suministros;
+      document.getElementById('countRoads3D').textContent = stats.roads || 0;
+      document.getElementById('countContours3D').textContent = stats.contours || 0;
     }
 
     function reset3DStats() {
@@ -3383,7 +3812,9 @@
         armados: 0,
         retenidas: 0,
         pat: 0,
-        suministros: 0
+        suministros: 0,
+        roads: 0,
+        contours: 0
       });
     }
 
@@ -3406,7 +3837,7 @@
         consultarArcgisReporte(33, whereEquals('TBT_COD_SED', codigoSED), true)
       ]);
 
-      return {
+      const baseData = {
         subestacion: subestaciones[0] || null,
         suministros,
         circuitosBT,
@@ -3415,24 +3846,27 @@
         puestasTierraBT,
         tramosBT
       };
+
+      let baseContext = { carreteras: [], curvasNivelPrimarias: [], curvasNivelSecundarias: [] };
+      if (window.Red3DContext) {
+        try {
+          baseContext = await window.Red3DContext.loadBaseContext(baseData);
+        } catch (error) {
+          console.warn('No se pudo cargar el contexto base 3D:', error);
+        }
+      }
+
+      return {
+        ...baseData,
+        ...baseContext
+      };
     }
 
     function construirSistema3D(data, codigoSED) {
       clear3DScene();
 
-      const originLatLng = pointToLatLng(data.subestacion?.geometry);
-      if (!originLatLng) {
-        throw new Error('La subestación seleccionada no tiene geometría válida para 3D.');
-      }
-
-      const [originLat, originLng] = originLatLng;
-      const origin = { lat: originLat, lng: originLng };
       const sedAttrs = data.subestacion?.attributes || {};
       const labelSed = `${codigoSED} | ${getValue(sedAttrs, ['SED_NOM_SED'], 'N/A')}`;
-
-      const transformerPoint = new THREE.Vector3(0, 0, 0);
-      const projectedLines = [];
-      const poleIndex = new Map();
       const stats = {
         label: labelSed,
         transformers: 0,
@@ -3443,8 +3877,54 @@
         armados: 0,
         retenidas: 0,
         pat: 0,
-        suministros: 0
+        suministros: 0,
+        roads: 0,
+        contours: 0
       };
+
+      const originLatLng = getSystemOriginLatLng3D(data);
+      if (!originLatLng) {
+        stats.label = `${codigoSED} | sin geometría`;
+        show3DNotice([
+          `SED ${codigoSED}`,
+          'No se encontraron coordenadas para construir el modelo 3D',
+          'Revise el código o cargue la red completa BT'
+        ]);
+        update3DStats(stats);
+        return {
+          codigo: codigoSED,
+          origin: null,
+          stats
+        };
+      }
+
+      const [originLat, originLng] = originLatLng;
+      const origin = { lat: originLat, lng: originLng };
+
+      const baseOptions = getOpcionesCapasBase3D();
+      const localBounds = createLocalBounds3D(data, origin);
+      let sampleHeight3D = () => 0;
+
+      if (window.Red3DTerrain?.createBaseLayer) {
+        capaBase3DActual = window.Red3DTerrain.createBaseLayer({
+          THREE,
+          localBounds,
+          context: data,
+          latLngToLocal: (lat, lng) => latLngToLocal3D(lat, lng, origin),
+          localToLatLng: (x, z) => localToLatLng3D(x, z, origin),
+          layerOptions: baseOptions
+        });
+        register3DObject(capaBase3DActual.group);
+        sampleHeight3D = capaBase3DActual.sampleHeight;
+        stats.roads = capaBase3DActual.stats.roads;
+        stats.contours = capaBase3DActual.stats.contours;
+        setFallbackBaseVisibility3D(false);
+      }
+
+      const groundAt3D = (point) => sampleHeight3D(point.x, point.z) || 0;
+      const transformerPoint = new THREE.Vector3(0, sampleHeight3D(0, 0), 0);
+      const projectedLines = [];
+      const poleIndex = new Map();
 
       const transformer = createTransformer3D(transformerPoint, sedAttrs, codigoSED);
       register3DObject(transformer, transformadores3D);
@@ -3455,11 +3935,11 @@
         const point = pointToLatLng(feature.geometry);
         if (!point) return;
         const local = pointToLocal3D(point, origin, 0);
+        local.y = groundAt3D(local);
         const attrs = feature.attributes || {};
         const circuitoCode = getValue(attrs, ['SAL_COD_SAL'], 'CIR');
         const circuit = createCircuit3D(local, attrs, circuitoCode);
-        circuit.position.y = 0;
-        const tranfoCable = createCableSpan(transformerPoint.clone().add(new THREE.Vector3(0, 3.0, 0)), new THREE.Vector3(local.x, 1.1, local.z), {
+        const tranfoCable = createCableSpan(transformerPoint.clone().add(new THREE.Vector3(0, 3.6, 0)), new THREE.Vector3(local.x, local.y + 1.1, local.z), {
           color: attrs.SAL_TIP_SRV === 'AP' ? 0xf1d44c : attrs.SAL_TIP_SRV === 'SP+AP' ? 0x7ec77e : 0x5b9bd5,
           radius: 0.03,
           type: 'A',
@@ -3476,9 +3956,12 @@
         const point = pointToLatLng(feature.geometry);
         if (!point) return;
         const local = pointToLocal3D(point, origin, 0);
+        local.y = groundAt3D(local);
         const attrs = feature.attributes || {};
         const codigo = getValue(attrs, ['NOD_COD_NOD'], 'POSTE');
-        poleItems.push({ attrs, point: local, code: codigo });
+        const item = { attrs, point: local, code: codigo };
+        poleItems.push(item);
+        poleIndex.set(normalize3DCode(codigo), item);
       });
 
       const linePaths = data.tramosBT.map((feature) => {
@@ -3492,7 +3975,7 @@
               const lng = Number(coord[1]);
               if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
               const local = latLngToLocal3D(lat, lng, origin);
-              return { x: local.x, z: local.z, lat, lng };
+              return { x: local.x, y: sampleHeight3D(local.x, local.z), z: local.z, lat, lng };
             })
             .filter(Boolean))
           .filter((path) => path.length > 1);
@@ -3514,6 +3997,7 @@
         const point = pointToLatLng(feature.geometry);
         if (!point) return;
         const local = pointToLocal3D(point, origin, 0);
+        local.y = groundAt3D(local);
         const attrs = feature.attributes || {};
         const codigo = getValue(attrs, ['SUM_COD_SUM'], 'SUM');
         const supply = createSupply3D(local, attrs, codigo);
@@ -3532,7 +4016,7 @@
               const lng = Number(coord[1]);
               if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
               const local = latLngToLocal3D(lat, lng, origin);
-              return { x: local.x, z: local.z };
+              return { x: local.x, y: sampleHeight3D(local.x, local.z), z: local.z };
             })
             .filter(Boolean);
           if (projected.length < 2) return;
@@ -3544,8 +4028,8 @@
             if (dist2D < 0.2) continue;
             const poleA = nearestPoleForPoint(a2d, poleItems);
             const poleB = nearestPoleForPoint(b2d, poleItems);
-            const startHeight = tipoRed === 'S' ? DEFAULT_SUBTER_HEIGHT : (poleA ? (parseMetricNumber(getValue(poleA.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78 : DEFAULT_AERIAL_HEIGHT);
-            const endHeight = tipoRed === 'S' ? DEFAULT_SUBTER_HEIGHT : (poleB ? (parseMetricNumber(getValue(poleB.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78 : DEFAULT_AERIAL_HEIGHT);
+            const startHeight = a2d.y + (tipoRed === 'S' ? DEFAULT_SUBTER_HEIGHT : (poleA ? (parseMetricNumber(getValue(poleA.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78 : DEFAULT_AERIAL_HEIGHT));
+            const endHeight = b2d.y + (tipoRed === 'S' ? DEFAULT_SUBTER_HEIGHT : (poleB ? (parseMetricNumber(getValue(poleB.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78 : DEFAULT_AERIAL_HEIGHT));
             const start = new THREE.Vector3(a2d.x, startHeight, a2d.z);
             const end = new THREE.Vector3(b2d.x, endHeight, b2d.z);
             const cable = createCableSpan(start, end, {
@@ -3576,11 +4060,12 @@
         const point = pointToLatLng(feature.geometry);
         if (!point) return;
         const local = pointToLocal3D(point, origin, 0);
+        local.y = groundAt3D(local);
         const attrs = feature.attributes || {};
         const codigo = getValue(attrs, ['RET_COD_RET'], 'RET');
         const poleCode = String(getValue(attrs, ['RET_COD_NOD'], '')).trim();
-        const poleMatch = poleItems.find((item) => String(item.code).trim() === poleCode);
-        const poleTop = poleMatch ? new THREE.Vector3(poleMatch.point.x, (parseMetricNumber(getValue(poleMatch.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78, poleMatch.point.z) : null;
+        const poleMatch = poleIndex.get(normalize3DCode(poleCode)) || nearestPoleForPoint(local, poleItems, 55);
+        const poleTop = poleMatch ? new THREE.Vector3(poleMatch.point.x, poleMatch.point.y + getPoleHeight3D(poleMatch.attrs) * 0.78, poleMatch.point.z) : null;
         const retained = createRetained3D(local, poleTop, attrs, codigo);
         register3DObject(retained, retenidas3D);
       });
@@ -3590,11 +4075,12 @@
         const point = pointToLatLng(feature.geometry);
         if (!point) return;
         const local = pointToLocal3D(point, origin, 0);
+        local.y = groundAt3D(local);
         const attrs = feature.attributes || {};
         const codigo = getValue(attrs, ['PAT_COD_PAT'], 'PAT');
         const poleCode = String(getValue(attrs, ['PAT_COD_NOD'], '')).trim();
-        const poleMatch = poleItems.find((item) => String(item.code).trim() === poleCode);
-        const polePoint = poleMatch ? new THREE.Vector3(poleMatch.point.x, 0, poleMatch.point.z) : null;
+        const poleMatch = poleIndex.get(normalize3DCode(poleCode)) || nearestPoleForPoint(local, poleItems, 45);
+        const polePoint = poleMatch ? new THREE.Vector3(poleMatch.point.x, poleMatch.point.y, poleMatch.point.z) : null;
         const pat = createPat3D(local, polePoint, attrs, codigo);
         register3DObject(pat, pat3D);
       });
@@ -3613,13 +4099,21 @@
       return {
         codigo: codigoSED,
         origin,
-        stats
+        stats,
+        baseLayer: capaBase3DActual,
+        baseOptions
       };
     }
 
     async function cargarSistema3DActivo(force = false) {
       const codigo = getSelected3DCode();
       if (!codigo) {
+        reset3DStats();
+        show3DNotice([
+          'Vista 3D lista',
+          'Seleccione una subestación o ingrese un código SED',
+          'Luego use Refrescar para construir la red'
+        ], { y: 6 });
         showNotification('Seleccione una subestación o ingrese un código SED para la vista 3D', 'error');
         return null;
       }
@@ -3647,6 +4141,11 @@
           console.error('Error al construir la vista 3D:', error);
           sistema3DActual = null;
           reset3DStats();
+          show3DNotice([
+            `SED ${codigo}`,
+            'No se pudo construir la vista 3D',
+            clean3DText(error.message, 'Error de datos o conexión', 48)
+          ], { y: 6 });
           showNotification(`No se pudo construir la vista 3D: ${error.message}`, 'error', 7000);
           return null;
         } finally {
@@ -3662,28 +4161,51 @@
     async function refrescarSistema3D() {
       if (!scene) return;
       await cargarSistema3DActivo(true);
-      animate3D();
+      start3DAnimation();
+    }
+
+    function resize3DRenderer() {
+      const container = document.getElementById('view3D');
+      if (!camera || !renderer || !container) return;
+      const width = Math.max(320, container.clientWidth || window.innerWidth);
+      const height = Math.max(240, container.clientHeight || window.innerHeight);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height, false);
     }
 
     async function init3D() {
+      if (typeof THREE === 'undefined') {
+        showNotification('No se pudo cargar Three.js. Revise la conexión a los CDN del visor 3D.', 'error', 7000);
+        return false;
+      }
+
       const container = document.getElementById('view3D');
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x9fd6f0);
-      scene.fog = new THREE.Fog(0x9fd6f0, 180, 900);
-      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2500);
+      scene.fog = new THREE.Fog(0x9fd6f0, 160, 2200);
+      camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2500);
       camera.position.set(60, 45, 60);
 
       const existingCanvas = container.querySelector('canvas');
       if (existingCanvas) existingCanvas.remove();
 
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      try {
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      } catch (error) {
+        console.error('No se pudo iniciar WebGL:', error);
+        showNotification('El navegador no pudo iniciar WebGL para la vista 3D.', 'error', 7000);
+        scene = null;
+        camera = null;
+        return false;
+      }
       renderer.setPixelRatio(window.devicePixelRatio || 1);
-      renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderer.outputEncoding = THREE.sRGBEncoding;
       renderer.domElement.style.display = 'block';
       container.appendChild(renderer.domElement);
+      resize3DRenderer();
 
       const hemisphere = new THREE.HemisphereLight(0xffffff, 0x5a7248, 1.1);
       scene.add(hemisphere);
@@ -3703,18 +4225,20 @@
       fill.position.set(-80, 50, -60);
       scene.add(fill);
 
-      const ground = new THREE.Mesh(
+      fallbackGround3D = new THREE.Mesh(
         new THREE.PlaneGeometry(1400, 1400, 40, 40),
         new THREE.MeshStandardMaterial({ color: 0xa9e68f, roughness: 1, metalness: 0 })
       );
-      ground.rotation.x = -Math.PI / 2;
-      ground.receiveShadow = true;
-      scene.add(ground);
+      fallbackGround3D.rotation.x = -Math.PI / 2;
+      fallbackGround3D.position.y = -0.08;
+      fallbackGround3D.receiveShadow = true;
+      scene.add(fallbackGround3D);
 
-      const grid = new THREE.GridHelper(1400, 70, 0x7a9b7a, 0xc3dfc3);
-      grid.material.transparent = true;
-      grid.material.opacity = 0.24;
-      scene.add(grid);
+      fallbackGrid3D = new THREE.GridHelper(1400, 70, 0x7a9b7a, 0xc3dfc3);
+      fallbackGrid3D.material.transparent = true;
+      fallbackGrid3D.material.opacity = 0.24;
+      fallbackGrid3D.position.y = 0.03;
+      scene.add(fallbackGrid3D);
 
       system3DRoot = new THREE.Group();
       scene.add(system3DRoot);
@@ -3728,15 +4252,26 @@
         controls.maxDistance = 2200;
       }
 
+      start3DAnimation();
       await cargarSistema3DActivo(true);
+      return true;
     }
 
     function animate3D() {
-      if (document.getElementById('view3D').style.display !== 'none') {
-        requestAnimationFrame(animate3D);
-        if (controls) controls.update();
-        renderer.render(scene, camera);
+      const view3D = document.getElementById('view3D');
+      if (!renderer || !scene || !camera || view3D.style.display === 'none') {
+        animacion3DActiva = false;
+        return;
       }
+      requestAnimationFrame(animate3D);
+      if (controls) controls.update();
+      renderer.render(scene, camera);
+    }
+
+    function start3DAnimation() {
+      if (animacion3DActiva) return;
+      animacion3DActiva = true;
+      requestAnimationFrame(animate3D);
     }
 
     async function toggle3DView() {
@@ -3746,9 +4281,11 @@
         if (!scene) {
           await init3D();
         } else {
+          resize3DRenderer();
+          start3DAnimation();
           await cargarSistema3DActivo(true);
         }
-        animate3D();
+        start3DAnimation();
       } else {
         view3D.style.display = 'none';
       }
@@ -3809,11 +4346,7 @@
 
     // Manejo de redimensionamiento
     window.addEventListener('resize', () => {
-      if (camera && renderer) {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-      }
+      resize3DRenderer();
     });
 
     // Inicialización
@@ -3821,5 +4354,6 @@
     showNotification('Sistema de red eléctrica listo. Ingrese ubigeos o un ID de transformador para comenzar.', 'info', 5000);
   </script>
   <script src="reportedxf.js"></script>
+  <script src="assets/js/kmz/reporte-kmz-redlin.js"></script>
 </body>
 </html>
