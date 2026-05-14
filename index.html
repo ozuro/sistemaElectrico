@@ -18,6 +18,7 @@
     }
   </script>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     html, body {
       height: 100%;
@@ -305,6 +306,10 @@
       background: linear-gradient(135deg, #6f42c1 0%, #5a2d91 100%);
       color: white;
     }
+
+    .popup-button-wide {
+      grid-column: 1 / -1;
+    }
     
     .loading-overlay {
       position: fixed;
@@ -495,6 +500,10 @@
     <button onclick="generarReporteKMZ()" class="btn-warning" title="Exportar modelo KML/KMZ para Google Earth">
       <i class="fas fa-globe-americas"></i> KMZ
     </button>
+
+    <button onclick="abrirVistaExportSolutions()" class="btn-bt" title="Guía y archivos para Topomagic, REDLIN y REDCAD">
+      <i class="fas fa-route"></i> Solutions
+    </button>
     
     <input type="file" id="inputArchivo" accept=".csv" onchange="cargarDesdeExcel()" title="Cargar archivo CSV">
     
@@ -519,6 +528,8 @@
   </div>
 
   <div id="map"></div>
+
+  <div id="solutionsExportView" aria-hidden="true"></div>
 
   <!-- Estadísticas de Red -->
   <div class="network-stats" id="networkStats" style="display: none;">
@@ -720,6 +731,115 @@
         .filter(path => path.length > 1);
     }
 
+    function getUtmZoneFromLon(lon) {
+      return Math.floor((lon + 180) / 6) + 1;
+    }
+
+    function wgs84ToUtm(lat, lon, zoneOverride) {
+      const zone = zoneOverride || getUtmZoneFromLon(lon);
+      const deg = Math.PI / 180;
+      const latRad = lat * deg;
+      const lonRad = lon * deg;
+      const lonOrigin = ((zone - 1) * 6 - 180 + 3) * deg;
+      const a = 6378137.0;
+      const eccSquared = 0.00669437999014;
+      const k0 = 0.9996;
+      const eccPrimeSquared = eccSquared / (1 - eccSquared);
+      const n = a / Math.sqrt(1 - eccSquared * Math.sin(latRad) ** 2);
+      const t = Math.tan(latRad) ** 2;
+      const c = eccPrimeSquared * Math.cos(latRad) ** 2;
+      const aa = Math.cos(latRad) * (lonRad - lonOrigin);
+      const m = a * (
+        (1 - eccSquared / 4 - 3 * eccSquared ** 2 / 64 - 5 * eccSquared ** 3 / 256) * latRad -
+        (3 * eccSquared / 8 + 3 * eccSquared ** 2 / 32 + 45 * eccSquared ** 3 / 1024) * Math.sin(2 * latRad) +
+        (15 * eccSquared ** 2 / 256 + 45 * eccSquared ** 3 / 1024) * Math.sin(4 * latRad) -
+        (35 * eccSquared ** 3 / 3072) * Math.sin(6 * latRad)
+      );
+
+      const easting = k0 * n * (
+        aa +
+        (1 - t + c) * aa ** 3 / 6 +
+        (5 - 18 * t + t ** 2 + 72 * c - 58 * eccPrimeSquared) * aa ** 5 / 120
+      ) + 500000.0;
+
+      let northing = k0 * (
+        m +
+        n * Math.tan(latRad) * (
+          aa ** 2 / 2 +
+          (5 - t + 9 * c + 4 * c ** 2) * aa ** 4 / 24 +
+          (61 - 58 * t + t ** 2 + 600 * c - 330 * eccPrimeSquared) * aa ** 6 / 720
+        )
+      );
+
+      if (lat < 0) northing += 10000000.0;
+      return { easting, northing, zone, hemisphere: lat < 0 ? 'S' : 'N' };
+    }
+
+    function coordDataFromLatLng(latlng, zoneOverride) {
+      if (!latlng) return { lat: '', lon: '', easting: '', northing: '', zone: '' };
+      const [lat, lon] = latlng;
+      const utm = wgs84ToUtm(lat, lon, zoneOverride);
+      return {
+        lat: redondear(lat, 7),
+        lon: redondear(lon, 7),
+        easting: redondear(utm.easting, 3),
+        northing: redondear(utm.northing, 3),
+        zone: `${utm.zone}${utm.hemisphere}`
+      };
+    }
+
+    function coordDataFromGeometry(geometry, zoneOverride) {
+      return coordDataFromLatLng(pointToLatLng(geometry), zoneOverride);
+    }
+
+    function getUtmBandFromLat(lat) {
+      const bands = 'CDEFGHJKLMNPQRSTUVWX';
+      if (!Number.isFinite(lat)) return lat < 0 ? 'L' : 'M';
+      if (lat <= -80) return 'C';
+      if (lat >= 84) return 'X';
+      return bands[Math.max(0, Math.min(bands.length - 1, Math.floor((lat + 80) / 8)))] || 'L';
+    }
+
+    function pathsToRoutePointsSolutions(geometry) {
+      if (!geometry?.paths) return [];
+      return geometry.paths
+        .map(path => path
+          .map(coord => ({
+            lon: Number(coord[0]),
+            lat: Number(coord[1]),
+            alt: Number.isFinite(Number(coord[2])) ? Number(coord[2]) : 0
+          }))
+          .filter(point => Number.isFinite(point.lat) && Number.isFinite(point.lon)))
+        .filter(path => path.length > 1);
+    }
+
+    function safeRouteName(value, fallback) {
+      const text = String(value || fallback || 'RUTA')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w.-]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      return text.substring(0, 28) || fallback || 'RUTA';
+    }
+
+    function azimuthDegrees(a, b, zone) {
+      if (!a || !b) return 0;
+      const au = wgs84ToUtm(a.lat, a.lon, zone);
+      const bu = wgs84ToUtm(b.lat, b.lon, zone);
+      const radians = Math.atan2(bu.easting - au.easting, bu.northing - au.northing);
+      return redondear((radians * 180 / Math.PI + 360) % 360, 3);
+    }
+
+    function firstLatLngFromFeatureList(features) {
+      for (const feature of features || []) {
+        const point = pointToLatLng(feature?.geometry);
+        if (point) return point;
+        const pathPoint = pathsToLatLngs(feature?.geometry)?.[0]?.[0];
+        if (pathPoint) return pathPoint;
+      }
+      return null;
+    }
+
     function fitToLayers(layersOrGroup, padding = 0.1) {
       const layers = Array.isArray(layersOrGroup) ? layersOrGroup : layersOrGroup.getLayers();
       if (!layers.length) return false;
@@ -793,6 +913,64 @@
     // Función para mostrar loading
     function mostrarLoading(mostrar = true) {
       document.getElementById('loadingOverlay').style.display = mostrar ? 'flex' : 'none';
+    }
+
+    function obtenerCodigoSEDSolutions(codigoSED = '') {
+      return String(
+        codigoSED ||
+        transformadorSeleccionado ||
+        window.transformadorSeleccionado ||
+        document.getElementById('inputID')?.value ||
+        ''
+      ).trim();
+    }
+
+    function fijarTransformadorSeleccionado(codigoSED) {
+      const codigo = String(codigoSED || '').trim();
+      if (!codigo) return '';
+      transformadorSeleccionado = codigo;
+      window.transformadorSeleccionado = codigo;
+      const input = document.getElementById('inputID');
+      if (input) input.value = codigo;
+      return codigo;
+    }
+
+    function actualizarVistaExportSolutions(codigoSED) {
+      const codigo = codigoSED || 'Sin seleccionar';
+      const headerCode = document.getElementById('solutionsSedCode');
+      const inlineCode = document.getElementById('solutionsSedCodeInline');
+      if (headerCode) headerCode.textContent = codigo;
+      if (inlineCode) inlineCode.textContent = codigo;
+    }
+
+    function abrirVistaExportSolutions(codigoSED = '') {
+      const codigo = obtenerCodigoSEDSolutions(codigoSED);
+      if (!codigo) {
+        showNotification('Seleccione una subestación o ingrese un código SED para exportar a Solutions', 'error', 6000);
+        return;
+      }
+
+      fijarTransformadorSeleccionado(codigo);
+      actualizarVistaExportSolutions(codigo);
+      const view = document.getElementById('solutionsExportView');
+      view.style.display = 'block';
+      view.setAttribute('aria-hidden', 'false');
+    }
+
+    function cerrarVistaExportSolutions() {
+      const view = document.getElementById('solutionsExportView');
+      view.style.display = 'none';
+      view.setAttribute('aria-hidden', 'true');
+    }
+
+    async function cargarRedCompletaDesdeSolutions() {
+      const codigo = obtenerCodigoSEDSolutions();
+      if (!codigo) {
+        showNotification('Seleccione una subestación antes de cargar la red BT', 'error', 6000);
+        return;
+      }
+      await cargarRedCompletaBT(codigo);
+      actualizarVistaExportSolutions(codigo);
     }
 
     // Función para actualizar estadísticas
@@ -1590,6 +1768,9 @@
               <button onclick="generarReporteKMZ('${id}')" class="btn-popup-info">
                 <i class="fas fa-globe-americas"></i> Reporte KMZ
               </button>
+              <button onclick="abrirVistaExportSolutions('${id}')" class="btn-popup-bt popup-button-wide">
+                <i class="fas fa-route"></i> Exportar Programa Solutions
+              </button>
             </div>
           `;
 
@@ -2011,6 +2192,1131 @@
         postesBT,
         tramosBT
       };
+    }
+
+    async function generarExcelSolutions(codigoSED = '') {
+      const codigo = obtenerCodigoSEDSolutions(codigoSED);
+      if (!codigo) {
+        showNotification('Seleccione o ingrese el código de la subestación para generar el Excel Solutions', 'error', 6000);
+        return false;
+      }
+
+      fijarTransformadorSeleccionado(codigo);
+      actualizarVistaExportSolutions(codigo);
+      showLoadingMessage(`Generando Excel Solutions de la SED ${codigo}...`);
+
+      try {
+        const datos = await obtenerDatosExportSolutions(codigo);
+        if (!datos.subestacion) {
+          throw new Error('No se encontró la subestación seleccionada.');
+        }
+
+        const workbook = construirLibroExportSolutions(codigo, datos);
+        const fecha = new Date().toISOString().split('T')[0];
+        descargarExcelXml(workbook, `solutions_redcad_${limpiarNombreArchivo(codigo)}_${fecha}.xls`);
+        showNotification(`Excel Solutions generado para la SED ${codigo}`, 'success', 7000);
+        return true;
+      } catch (error) {
+        console.error('Error al generar Excel Solutions:', error);
+        showNotification(`Error al generar Excel Solutions: ${error.message}`, 'error', 8000);
+        return false;
+      } finally {
+        hideLoadingMessage();
+      }
+    }
+
+    async function generarTopomagicRLT(codigoSED = '') {
+      const codigo = obtenerCodigoSEDSolutions(codigoSED);
+      if (!codigo) {
+        showNotification('Seleccione o ingrese el código de la subestación para generar el RLT de Topomagic', 'error', 6000);
+        return false;
+      }
+
+      fijarTransformadorSeleccionado(codigo);
+      actualizarVistaExportSolutions(codigo);
+      showLoadingMessage(`Generando RLT para Topomagic de la SED ${codigo}...`);
+
+      try {
+        const datos = await obtenerDatosExportSolutions(codigo);
+        if (!datos.subestacion) {
+          throw new Error('No se encontró la subestación seleccionada.');
+        }
+
+        const zone = obtenerZonaUtmSolutions(datos);
+        const rows = construirFilasRltTopomagic(datos.tramosBT, zone);
+        if (rows.length <= 2) {
+          throw new Error('No se encontraron tramos BT con geometría para construir el RLT.');
+        }
+        const fecha = new Date().toISOString().split('T')[0];
+        descargarExcelXml([{ name: 'RLT', rows }], `topomagic_rlt_${limpiarNombreArchivo(codigo)}_${fecha}.xls`);
+        showNotification('Plantilla RLT generada. Ábrala en Excel y guárdela como Libro Excel 97-2003 (*.xls) antes de importarla en Topomagic.', 'info', 10000);
+        return true;
+      } catch (error) {
+        console.error('Error al generar RLT Topomagic:', error);
+        showNotification(`Error al generar RLT Topomagic: ${error.message}`, 'error', 8000);
+        return false;
+      } finally {
+        hideLoadingMessage();
+      }
+    }
+
+    async function generarTopomagicKML(codigoSED = '') {
+      const codigo = obtenerCodigoSEDSolutions(codigoSED);
+      if (!codigo) {
+        showNotification('Seleccione o ingrese el código de la subestación para generar el KML de Topomagic', 'error', 6000);
+        return false;
+      }
+
+      fijarTransformadorSeleccionado(codigo);
+      actualizarVistaExportSolutions(codigo);
+      showLoadingMessage(`Generando KML para Topomagic de la SED ${codigo}...`);
+
+      try {
+        const datos = await obtenerDatosExportSolutions(codigo);
+        if (!datos.subestacion) {
+          throw new Error('No se encontró la subestación seleccionada.');
+        }
+
+        const kml = construirKmlTopomagic(codigo, datos.tramosBT);
+        const fecha = new Date().toISOString().split('T')[0];
+        descargarTexto(`topomagic_rutas_${limpiarNombreArchivo(codigo)}_${fecha}.kml`, kml, 'application/vnd.google-earth.kml+xml;charset=utf-8;');
+        showNotification('KML Topomagic generado. En Topomagic use Archivo > Importar > Topografía y seleccione este KML.', 'success', 9000);
+        return true;
+      } catch (error) {
+        console.error('Error al generar KML Topomagic:', error);
+        showNotification(`Error al generar KML Topomagic: ${error.message}`, 'error', 8000);
+        return false;
+      } finally {
+        hideLoadingMessage();
+      }
+    }
+
+    async function generarTopomagicCSV(codigoSED = '') {
+      const codigo = obtenerCodigoSEDSolutions(codigoSED);
+      if (!codigo) {
+        showNotification('Seleccione o ingrese el código de la subestación para generar el CSV de Topomagic', 'error', 6000);
+        return false;
+      }
+
+      fijarTransformadorSeleccionado(codigo);
+      actualizarVistaExportSolutions(codigo);
+      showLoadingMessage(`Generando CSV para Topomagic de la SED ${codigo}...`);
+
+      try {
+        const datos = await obtenerDatosExportSolutions(codigo);
+        if (!datos.subestacion) {
+          throw new Error('No se encontró la subestación seleccionada.');
+        }
+
+        const zone = obtenerZonaUtmSolutions(datos);
+        const csv = construirCsvTopomagic(datos.tramosBT, zone);
+        if (!csv.rows) {
+          throw new Error('No se encontraron tramos BT con geometría para construir el CSV.');
+        }
+
+        const fecha = new Date().toISOString().split('T')[0];
+        descargarTexto(`topomagic_puntos_${limpiarNombreArchivo(codigo)}_${fecha}.csv`, csv.text, 'text/csv;charset=utf-8;');
+        showNotification(`CSV Topomagic generado. Al importar, use Zona ${zone} y Banda ${csv.band || 'UTM'} si el programa lo solicita.`, 'success', 9000);
+        return true;
+      } catch (error) {
+        console.error('Error al generar CSV Topomagic:', error);
+        showNotification(`Error al generar CSV Topomagic: ${error.message}`, 'error', 8000);
+        return false;
+      } finally {
+        hideLoadingMessage();
+      }
+    }
+
+    async function generarRedlinRLT(codigoSED = '') {
+      const codigo = obtenerCodigoSEDSolutions(codigoSED);
+      if (!codigo) {
+        showNotification('Seleccione o ingrese el código de la subestación para generar el RLT de REDLIN', 'error', 6000);
+        return false;
+      }
+
+      fijarTransformadorSeleccionado(codigo);
+      actualizarVistaExportSolutions(codigo);
+      showLoadingMessage(`Generando RLT para REDLIN de la SED ${codigo}...`);
+
+      try {
+        const datos = await obtenerDatosExportSolutions(codigo);
+        if (!datos.subestacion) {
+          throw new Error('No se encontró la subestación seleccionada.');
+        }
+
+        const zone = obtenerZonaUtmSolutions(datos);
+        const rows = construirFilasRltRedlin(datos.tramosBT, zone);
+        if (rows.length <= 2) {
+          throw new Error('No se encontraron tramos BT con geometría para construir el RLT.');
+        }
+        const fecha = new Date().toISOString().split('T')[0];
+        descargarExcelXml([{ name: 'RLT', rows }], `redlin_rlt_${limpiarNombreArchivo(codigo)}_${fecha}.xls`);
+        showNotification('RLT REDLIN generado. En REDLIN use Archivo > Importar y seleccione este archivo.', 'success', 8000);
+        return true;
+      } catch (error) {
+        console.error('Error al generar RLT REDLIN:', error);
+        showNotification(`Error al generar RLT REDLIN: ${error.message}`, 'error', 8000);
+        return false;
+      } finally {
+        hideLoadingMessage();
+      }
+    }
+
+    async function descargarPaqueteSolutions() {
+      const codigo = obtenerCodigoSEDSolutions();
+      if (!codigo) {
+        showNotification('Seleccione una subestación o ingrese un código SED para descargar el paquete', 'error', 6000);
+        return;
+      }
+
+      fijarTransformadorSeleccionado(codigo);
+      actualizarVistaExportSolutions(codigo);
+      showNotification('Se descargarán KML Topomagic, CSV de respaldo, Excel de control, metrado, KMZ y DXF. Si el navegador bloquea descargas múltiples, use los botones individuales.', 'info', 9000);
+
+      const topomagicOk = await generarTopomagicKML(codigo);
+      if (!topomagicOk) return;
+      await esperarSolutions(700);
+      await generarTopomagicCSV(codigo);
+      await esperarSolutions(700);
+      const excelOk = await generarExcelSolutions(codigo);
+      if (!excelOk) return;
+      await esperarSolutions(700);
+      await generarReporteMetradoTrafo(codigo);
+      await esperarSolutions(700);
+
+      if (typeof window.generarReporteKMZ === 'function') {
+        await window.generarReporteKMZ(codigo);
+      } else {
+        showNotification('El exportador KMZ aún no está disponible en esta carga de la página.', 'error', 7000);
+      }
+
+      await esperarSolutions(700);
+
+      if (typeof window.generarReporteDXF === 'function') {
+        await window.generarReporteDXF(codigo);
+      } else {
+        showNotification('El exportador DXF aún no está disponible en esta carga de la página.', 'error', 7000);
+      }
+    }
+
+    function esperarSolutions(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function descargarTexto(filename, text, type = 'text/plain;charset=utf-8;') {
+      const blob = new Blob([text], { type });
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 500);
+    }
+
+    async function obtenerDatosExportSolutions(codigoSED) {
+      const [
+        subestaciones,
+        suministros,
+        circuitosBT,
+        postesBT,
+        retenidasBT,
+        puestasTierraBT,
+        tramosBT
+      ] = await Promise.all([
+        consultarArcgisReporte(96, whereEquals('SED_COD_SED', codigoSED), true),
+        consultarArcgisReporte(24, whereEquals('SUM_COD_SED', codigoSED), true),
+        consultarArcgisReporte(25, whereEquals('SAL_COD_SED', codigoSED), true),
+        consultarArcgisReporte(27, whereEquals('NOD_COD_SED', codigoSED), true),
+        consultarArcgisReporte(28, whereEquals('RET_COD_SED', codigoSED), true),
+        consultarArcgisReporte(29, whereEquals('PAT_COD_SED', codigoSED), true),
+        consultarArcgisReporte(33, whereEquals('TBT_COD_SED', codigoSED), true)
+      ]);
+
+      return {
+        subestacion: subestaciones[0] || null,
+        suministros,
+        circuitosBT,
+        postesBT,
+        retenidasBT,
+        puestasTierraBT,
+        tramosBT
+      };
+    }
+
+    function construirLibroExportSolutions(codigoSED, datos) {
+      const zone = obtenerZonaUtmSolutions(datos);
+      return [
+        {
+          name: '00_Guia',
+          rows: construirFilasGuiaSolutions(codigoSED, datos, zone)
+        },
+        {
+          name: 'Topomagic_Suministros',
+          rows: construirFilasSolutionsSuministros(datos.suministros, zone)
+        },
+        {
+          name: 'Topomagic_Rutas_BT',
+          rows: construirFilasSolutionsRutasBT(datos.tramosBT, zone)
+        },
+        {
+          name: 'REDLIN_Postes_BT',
+          rows: construirFilasSolutionsPostesBT(datos.postesBT, zone)
+        },
+        {
+          name: 'REDLIN_Retenidas_PAT',
+          rows: construirFilasSolutionsRetenidasPat(datos.retenidasBT, datos.puestasTierraBT, zone)
+        },
+        {
+          name: 'REDCAD_Subestacion_BT',
+          rows: construirFilasSolutionsRedcad(codigoSED, datos, zone)
+        },
+        {
+          name: 'Estructuras',
+          rows: construirFilasRedcadEstructuras(codigoSED, datos, zone)
+        },
+        {
+          name: 'Acometidas',
+          rows: construirFilasRedcadAcometidas(codigoSED, datos, zone)
+        },
+        {
+          name: 'REDCAD_Circuitos_BT',
+          rows: construirFilasSolutionsCircuitosBT(datos.circuitosBT, zone)
+        },
+        {
+          name: 'REDCAD_Capas_DXF',
+          rows: construirFilasSolutionsCapasDxf()
+        }
+      ];
+    }
+
+    function construirFilasRltTopomagic(tramosBT, zone) {
+      const rows = [
+        ['RLT'],
+        ['Nombre de Ruta', 'Acumulada', 'Altitud', 'Angulo', 'Vertice', 'Comentario', 'Superficie', 'Zona UTM', 'Banda UTM', 'Este', 'Norte']
+      ];
+      agregarFilasRltDesdeTramos(rows, tramosBT, zone, true);
+      return rows;
+    }
+
+    function construirFilasRltRedlin(tramosBT, zone) {
+      const rows = [
+        ['RLT'],
+        ['Nombre de Ruta', 'Acumulada', 'Altitud', 'Angulo', 'Vertice', 'Comentario', 'Zona', 'Banda', 'Este', 'Norte']
+      ];
+      agregarFilasRltDesdeTramos(rows, tramosBT, zone, false);
+      return rows;
+    }
+
+    function agregarFilasRltDesdeTramos(rows, tramosBT, zone, incluirSuperficie) {
+      tramosBT.forEach((feature, featureIndex) => {
+        const attrs = feature.attributes || {};
+        const paths = pathsToRoutePointsSolutions(feature.geometry);
+        const tramoCode = getValue(attrs, ['TBT_COD_TBT', 'OBJECTID'], `TRAMO_${featureIndex + 1}`);
+        const salida = getValue(attrs, ['TBT_COD_SAL', 'TBT_NOM_SAL'], '');
+        const tipoRed = getTipoRed(getValue(attrs, ['TBT_COD_TIP_RED'], 'N/A'));
+        const routeBase = safeRouteName(`${salida || 'BT'}_${tramoCode}`, `BT_${featureIndex + 1}`);
+
+        paths.forEach((path, pathIndex) => {
+          let acumulada = 0;
+          const routeName = paths.length > 1 ? safeRouteName(`${routeBase}_${pathIndex + 1}`, routeBase) : routeBase;
+
+          path.forEach((point, pointIndex) => {
+            const prev = path[pointIndex - 1];
+            const next = path[pointIndex + 1];
+            if (prev) {
+              acumulada += distanciaMetros([prev.lat, prev.lon], [point.lat, point.lon]);
+            }
+
+            const utm = wgs84ToUtm(point.lat, point.lon, zone);
+            const angle = prev ? azimuthDegrees(prev, point, zone) : azimuthDegrees(point, next, zone);
+            const common = [
+              pointIndex === 0 ? routeName : '',
+              redondear(acumulada, 3),
+              redondear(point.alt || 0, 3),
+              angle,
+              `V${pointIndex + 1}`,
+              `${tramoCode} ${tipoRed}`,
+            ];
+
+            if (incluirSuperficie) {
+              rows.push([
+                ...common,
+                'NATURAL',
+                zone,
+                getUtmBandFromLat(point.lat),
+                redondear(utm.easting, 3),
+                redondear(utm.northing, 3)
+              ]);
+            } else {
+              rows.push([
+                ...common,
+                zone,
+                getUtmBandFromLat(point.lat),
+                redondear(utm.easting, 3),
+                redondear(utm.northing, 3)
+              ]);
+            }
+          });
+        });
+      });
+    }
+
+    function construirCsvTopomagic(tramosBT, zone) {
+      const lines = [
+        ['Punto', 'Coordenada Y', 'Coordenada X', 'Altitud', 'Descripcion']
+      ];
+      let counter = 1;
+      let firstBand = '';
+
+      tramosBT.forEach((feature, featureIndex) => {
+        const attrs = feature.attributes || {};
+        const paths = pathsToRoutePointsSolutions(feature.geometry);
+        const tramoCode = getValue(attrs, ['TBT_COD_TBT', 'OBJECTID'], `TRAMO_${featureIndex + 1}`);
+
+        paths.forEach((path, pathIndex) => {
+          path.forEach((point, pointIndex) => {
+            const utm = wgs84ToUtm(point.lat, point.lon, zone);
+            const band = getUtmBandFromLat(point.lat);
+            if (!firstBand) firstBand = band;
+            lines.push([
+              safeRouteName(`${tramoCode}_${pathIndex + 1}_${pointIndex + 1}`, `P${counter}`),
+              redondear(utm.northing, 3),
+              redondear(utm.easting, 3),
+              redondear(point.alt || 0, 3),
+              `${tramoCode} V${pointIndex + 1}`
+            ]);
+            counter += 1;
+          });
+        });
+      });
+
+      return {
+        text: lines.map(row => row.map(value => csvCell(value)).join(',')).join('\r\n'),
+        rows: counter - 1,
+        band: firstBand
+      };
+    }
+
+    function construirKmlTopomagic(codigoSED, tramosBT) {
+      const placemarks = [];
+
+      tramosBT.forEach((feature, featureIndex) => {
+        const attrs = feature.attributes || {};
+        const paths = pathsToRoutePointsSolutions(feature.geometry);
+        const tramoCode = getValue(attrs, ['TBT_COD_TBT', 'OBJECTID'], `TRAMO_${featureIndex + 1}`);
+        const salida = getValue(attrs, ['TBT_COD_SAL', 'TBT_NOM_SAL'], '');
+        const routeBase = safeRouteName(`${salida || 'BT'}_${tramoCode}`, `BT_${featureIndex + 1}`);
+
+        paths.forEach((path, pathIndex) => {
+          const coordinates = path
+            .map(point => `${redondear(point.lon, 8)},${redondear(point.lat, 8)},${redondear(point.alt || 0, 3)}`)
+            .join(' ');
+
+          if (!coordinates) return;
+          const name = paths.length > 1 ? `${routeBase}_${pathIndex + 1}` : routeBase;
+          placemarks.push(`
+      <Placemark>
+        <name>${escapeXml(name)}</name>
+        <description>${escapeXml(`SED ${codigoSED} - Tramo ${tramoCode}`)}</description>
+        <Style><LineStyle><color>ff00ffff</color><width>2.5</width></LineStyle></Style>
+        <LineString>
+          <tessellate>1</tessellate>
+          <altitudeMode>clampToGround</altitudeMode>
+          <coordinates>${coordinates}</coordinates>
+        </LineString>
+      </Placemark>`);
+        });
+      });
+
+      if (!placemarks.length) {
+        throw new Error('No se encontraron tramos BT con geometría para construir el KML.');
+      }
+
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${escapeXml(`Topomagic rutas BT SED ${codigoSED}`)}</name>
+    <description>${escapeXml('Rutas BT generadas para importar en TOPOMAGIC desde Archivo > Importar > Topografía.')}</description>
+    <Folder>
+      <name>${escapeXml(`Rutas BT ${codigoSED}`)}</name>${placemarks.join('')}
+    </Folder>
+  </Document>
+</kml>`;
+    }
+
+    function csvCell(value) {
+      const text = String(value ?? '');
+      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }
+
+    function obtenerZonaUtmSolutions(datos) {
+      const firstLatLng =
+        pointToLatLng(datos.subestacion?.geometry) ||
+        firstLatLngFromFeatureList(datos.suministros) ||
+        firstLatLngFromFeatureList(datos.circuitosBT) ||
+        firstLatLngFromFeatureList(datos.postesBT) ||
+        firstLatLngFromFeatureList(datos.tramosBT);
+
+      return firstLatLng ? getUtmZoneFromLon(firstLatLng[1]) : 19;
+    }
+
+    function zonaTextoSolutions(datos, zone) {
+      const firstLatLng =
+        pointToLatLng(datos.subestacion?.geometry) ||
+        firstLatLngFromFeatureList(datos.suministros) ||
+        firstLatLngFromFeatureList(datos.circuitosBT) ||
+        firstLatLngFromFeatureList(datos.postesBT) ||
+        firstLatLngFromFeatureList(datos.tramosBT);
+
+      return `${zone}${firstLatLng?.[0] < 0 ? 'S' : 'N'}`;
+    }
+
+    function construirFilasGuiaSolutions(codigoSED, datos, zone) {
+      const attrs = datos.subestacion?.attributes || {};
+      const zona = zonaTextoSolutions(datos, zone);
+      return [
+        ['GUIA DE EXPORTACION PROGRAMA SOLUTIONS'],
+        ['Fecha de generación', new Date().toLocaleString('es-PE')],
+        ['Código SED', codigoSED],
+        ['Nombre SED', getValue(attrs, ['SED_NOM_SED', 'SED_NOM_SUB', 'SED_DES_SED'])],
+        ['Zona UTM sugerida', zona],
+        ['Suministros', datos.suministros.length],
+        ['Circuitos BT', datos.circuitosBT.length],
+        ['Postes BT', datos.postesBT.length],
+        ['Tramos BT', datos.tramosBT.length],
+        [],
+        ['Orden', 'Programa', 'Archivo/hoja', 'Qué hacer'],
+        [1, 'Topomagic', 'topomagic_rutas_*.kml', 'Archivo > Importar > Topografía. Seleccionar este KML; no seleccionar Excel Solutions.'],
+        [2, 'Topomagic', 'topomagic_puntos_*.csv', 'Solo respaldo: importar por Archivo > Importar > Topografía si el XLS RLT no carga.'],
+        [3, 'Topomagic', 'topomagic_rlt_*.xls', 'Opcional: abrir en Excel y guardar como Libro Excel 97-2003 antes de importarlo.'],
+        [4, 'Topomagic', 'Archivo .top', 'Revisar Rutas, obtener perfil si hace falta y guardar como .top.'],
+        [5, 'REDLIN', 'Archivo .top o redlin_rlt_*.xls', 'Archivo > Importar. Revisar Vista Planta y Vista Perfil.'],
+        [6, 'REDLIN', 'Hoja REDLIN_Postes_BT', 'Usar como lista de postes, armados, aterramientos y datos técnicos.'],
+        [7, 'REDCAD', 'reporte_dxf_*.dxf', 'Archivo > Cargar Catastro. Seleccionar el DXF para ver el diseño BT.'],
+        [],
+        ['Nota', 'Si Topomagic muestra “no es un archivo RLT válido”, use KML/CSV o convierta la plantilla RLT en Microsoft Excel con Guardar como > Libro Excel 97-2003 (*.xls).']
+      ];
+    }
+
+    function construirFilasSolutionsSuministros(suministros, zone) {
+      const rows = [
+        ['Código suministro', 'Nombre', 'Dirección', 'Latitud WGS84', 'Longitud WGS84', 'Este UTM', 'Norte UTM', 'Zona UTM', 'Tipo servicio', 'Tarifa', 'Tensión', 'Fases medidor', 'Máx demanda kW', 'Potencia equiv kVA', 'Estado']
+      ];
+
+      suministros.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const c = coordDataFromGeometry(feature.geometry, zone);
+        rows.push([
+          getValue(attrs, ['SUM_COD_SUM']),
+          getValue(attrs, ['SUM_NOM_SUM']),
+          getValue(attrs, ['SUM_DIR_SUM']),
+          c.lat,
+          c.lon,
+          c.easting,
+          c.northing,
+          c.zone,
+          getTipoServicio(getValue(attrs, ['SUM_TIP_SRV'], 'N/A')),
+          getValue(attrs, ['SUM_TAR_SUM']),
+          getValue(attrs, ['SUM_TEN_SUM']),
+          getValue(attrs, ['SUM_MED_FAS']),
+          parseMetricNumber(getValue(attrs, ['SUM_MAX_DEM'], 0)),
+          parseMetricNumber(getValue(attrs, ['SUM_POT_EQT'], 0)),
+          getValue(attrs, ['SUM_EST_SUM'])
+        ]);
+      });
+
+      if (rows.length === 1) rows.push(['Sin suministros asociados a esta SED']);
+      return rows;
+    }
+
+    function construirFilasSolutionsRutasBT(tramosBT, zone) {
+      const rows = [
+        ['Código tramo', 'Circuito', 'Ruta', 'Vértice', 'Latitud WGS84', 'Longitud WGS84', 'Este UTM', 'Norte UTM', 'Zona UTM', 'Tipo red', 'Fase', 'Material', 'Sección', 'Nro conductores', 'Longitud tramo m', 'Estado conservación']
+      ];
+
+      tramosBT.forEach((feature, featureIndex) => {
+        const attrs = feature.attributes || {};
+        const paths = pathsToLatLngs(feature.geometry);
+        const tramo = getValue(attrs, ['TBT_COD_TBT', 'OBJECTID'], `TRAMO-${featureIndex + 1}`);
+        const circuito = getValue(attrs, ['TBT_NOM_SAL', 'TBT_COD_SAL']);
+        const materialCodigo = getValue(attrs, ['TBT_SP_MAT_CND', 'TBT_AP_MAT_CND', 'TBT_COD_MAT_COND'], 'N/A');
+        const longitud = redondear(calcularLongitudTramoBT(feature), 2);
+
+        if (!paths.length) {
+          rows.push([tramo, circuito, '', '', '', '', '', '', '', getTipoRed(getValue(attrs, ['TBT_COD_TIP_RED'], 'N/A')), clasificarFaseBT(attrs), getMaterialConductor(materialCodigo), getValue(attrs, ['TBT_SP_SEC_CND', 'TBT_AP_SEC_CND', 'TBT_SEC_CND']), getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND', 'TBT_NRO_CND']), longitud, getEstadoConservacion(getValue(attrs, ['TBT_EST_CON'], 'N/A'))]);
+          return;
+        }
+
+        paths.forEach((path, pathIndex) => {
+          path.forEach((latlng, vertexIndex) => {
+            const c = coordDataFromLatLng(latlng, zone);
+            rows.push([
+              tramo,
+              circuito,
+              pathIndex + 1,
+              vertexIndex + 1,
+              c.lat,
+              c.lon,
+              c.easting,
+              c.northing,
+              c.zone,
+              getTipoRed(getValue(attrs, ['TBT_COD_TIP_RED'], 'N/A')),
+              clasificarFaseBT(attrs),
+              getMaterialConductor(materialCodigo),
+              getValue(attrs, ['TBT_SP_SEC_CND', 'TBT_AP_SEC_CND', 'TBT_SEC_CND']),
+              getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND', 'TBT_NRO_CND']),
+              longitud,
+              getEstadoConservacion(getValue(attrs, ['TBT_EST_CON'], 'N/A'))
+            ]);
+          });
+        });
+      });
+
+      if (rows.length === 1) rows.push(['Sin tramos BT asociados a esta SED']);
+      return rows;
+    }
+
+    function construirFilasSolutionsPostesBT(postesBT, zone) {
+      const rows = [
+        ['Código poste', 'Salida BT', 'Latitud WGS84', 'Longitud WGS84', 'Este UTM', 'Norte UTM', 'Zona UTM', 'Función', 'Material', 'Altura m', 'Tipo soporte', 'Clase', 'Esfuerzo', 'Cantidad soportes', 'Armados', 'Aterramiento', 'Telecomunicación', 'Estado conservación']
+      ];
+
+      postesBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const c = coordDataFromGeometry(feature.geometry, zone);
+        rows.push([
+          getValue(attrs, ['NOD_COD_NOD']),
+          getValue(attrs, ['NOD_COD_SAL', 'NOD_NOM_SAL']),
+          c.lat,
+          c.lon,
+          c.easting,
+          c.northing,
+          c.zone,
+          getFuncionEstructura(getValue(attrs, ['NOD_COD_FNC'], 'N/A')),
+          getMaterialSoporte(getValue(attrs, ['NOD_COD_MAT_SPT'], 'N/A')),
+          parseMetricNumber(getValue(attrs, ['NOD_ALT_SPT'], 0)),
+          getTipoSoporte(getValue(attrs, ['NOD_COD_TIP_SPT'], 'N/A')),
+          getValue(attrs, ['NOD_CLS_SPT']),
+          getValue(attrs, ['NOD_ESF_SPT']),
+          cantidadSoportesPoste(attrs),
+          describirArmadosPoste(attrs),
+          tieneBanderaSi(attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER']) ? 'Sí' : 'No',
+          tieneBanderaSi(attrs, ['NOD_FLG_TELE']) ? 'Sí' : 'No',
+          getEstadoConservacion(getValue(attrs, ['NOD_EST_CONS'], 'N/A'))
+        ]);
+      });
+
+      if (rows.length === 1) rows.push(['Sin postes BT asociados a esta SED']);
+      return rows;
+    }
+
+    function construirFilasSolutionsRetenidasPat(retenidasBT, puestasTierraBT, zone) {
+      const rows = [
+        ['Tipo', 'Código', 'Poste asociado', 'Latitud WGS84', 'Longitud WGS84', 'Este UTM', 'Norte UTM', 'Zona UTM', 'Ángulo', 'Observación']
+      ];
+
+      retenidasBT.forEach((feature, index) => {
+        const attrs = feature.attributes || {};
+        const c = coordDataFromGeometry(feature.geometry, zone);
+        rows.push([
+          'Retenida BT',
+          getValue(attrs, ['RET_COD_RET', 'OBJECTID'], `RET-${index + 1}`),
+          getValue(attrs, ['RET_COD_NOD', 'RET_COD_POSTE']),
+          c.lat,
+          c.lon,
+          c.easting,
+          c.northing,
+          c.zone,
+          getValue(attrs, ['RET_ANG_RET', 'RET_ANGULO'], ''),
+          getValue(attrs, ['RET_OBS', 'OBSERVACION'], '')
+        ]);
+      });
+
+      puestasTierraBT.forEach((feature, index) => {
+        const attrs = feature.attributes || {};
+        const c = coordDataFromGeometry(feature.geometry, zone);
+        rows.push([
+          'Puesta tierra BT',
+          getValue(attrs, ['PAT_COD_PAT', 'OBJECTID'], `PAT-${index + 1}`),
+          getValue(attrs, ['PAT_COD_NOD', 'PAT_COD_POSTE']),
+          c.lat,
+          c.lon,
+          c.easting,
+          c.northing,
+          c.zone,
+          getValue(attrs, ['PAT_ANG_PAT', 'PAT_ANGULO'], ''),
+          getValue(attrs, ['PAT_OBS', 'OBSERVACION'], '')
+        ]);
+      });
+
+      if (rows.length === 1) rows.push(['Sin retenidas ni puestas a tierra asociadas a esta SED']);
+      return rows;
+    }
+
+    function construirFilasSolutionsRedcad(codigoSED, datos, zone) {
+      const attrs = datos.subestacion?.attributes || {};
+      const c = coordDataFromGeometry(datos.subestacion?.geometry, zone);
+      return [
+        ['Código SED', 'Nombre SED', 'Potencia kVA', 'Tensión primaria', 'Latitud WGS84', 'Longitud WGS84', 'Este UTM', 'Norte UTM', 'Zona UTM', 'Circuitos BT', 'Postes BT', 'Tramos BT', 'Suministros', 'Retenidas', 'PAT'],
+        [
+          codigoSED,
+          getValue(attrs, ['SED_NOM_SED', 'SED_NOM_SUB', 'SED_DES_SED']),
+          parseMetricNumber(getValue(attrs, ['SED_POT_INST', 'SED_POT_SED', 'SED_POT_NOM'], 0)),
+          getValue(attrs, ['SED_TEN_NOM_PRI', 'SED_TEN_PRI']),
+          c.lat,
+          c.lon,
+          c.easting,
+          c.northing,
+          c.zone,
+          datos.circuitosBT.length,
+          datos.postesBT.length,
+          datos.tramosBT.length,
+          datos.suministros.length,
+          datos.retenidasBT.length,
+          datos.puestasTierraBT.length
+        ]
+      ];
+    }
+
+    const REDCAD_ESTRUCTURAS_HEADER = [
+      'ID Estructura',
+      'ID Estructura Padre',
+      'Código de Estructura',
+      'Zona-Banda',
+      'X',
+      'Y',
+      'Tipo Red',
+      'N° Subestacion',
+      'Nombre\nSubestación',
+      'Tipo\nSubestación',
+      'Armado Primario MT',
+      'Armado Secundario MT',
+      'Armado Primario BT',
+      'Armado Secundario BT',
+      'Soporte',
+      'Cantidad de soportes',
+      'PAT',
+      'Retenidas',
+      'CajasDerivacion',
+      'PuntoIluminación+\nSoporteLuminaria',
+      'Protecciones',
+      'Cimentación',
+      'Terreno',
+      'Accesibilidad',
+      'Conductor',
+      'Tipo de sistema de linea',
+      '¿Es vano flojo?',
+      'Comentario'
+    ];
+
+    const REDCAD_ACOMETIDAS_HEADER = [
+      'ID Estructura',
+      'N° Acometida',
+      'X',
+      'Y',
+      'Tipo',
+      'Longitud real',
+      'Longitud sobreescrita',
+      'Accesorio de Acometida',
+      'Carga',
+      'Nombre',
+      'Potencia (kW)',
+      'Factor de simultaneidad'
+    ];
+
+    function construirFilasRedcadEstructuras(codigoSED, datos, zone) {
+      return construirModeloRedcad(codigoSED, datos, zone).estructurasRows;
+    }
+
+    function construirFilasRedcadAcometidas(codigoSED, datos, zone) {
+      return construirModeloRedcad(codigoSED, datos, zone).acometidasRows;
+    }
+
+    function construirModeloRedcad(codigoSED, datos, zone) {
+      const context = crearContextoRedcad(datos, zone);
+      const rows = [['RCE', 0.34], REDCAD_ESTRUCTURAS_HEADER];
+      const nodes = [];
+      const usedIds = new Set();
+      const sedAttrs = datos.subestacion?.attributes || {};
+      const sedPoint = redcadPointFromGeometry(datos.subestacion?.geometry, context);
+      const sedId = limpiarIdRedcad(codigoSED || getValue(sedAttrs, ['SED_COD_SED'], 'SED'));
+      const sedName = textoRedcad(getValue(sedAttrs, ['SED_NOM_SED', 'SED_NOM_SUB', 'SED_DES_SED'], sedId));
+      const sedType = textoRedcad(getValue(sedAttrs, ['SED_TIP_SED', 'SED_TIPO'], 'Subestacion'));
+      const sedPower = parseMetricNumber(getValue(sedAttrs, ['SED_POT_INST', 'SED_POT_SED', 'SED_POT_NOM'], 0));
+      const sedVoltage = textoRedcad(getValue(sedAttrs, ['SED_TEN_NOM_PRI', 'SED_TEN_PRI'], ''));
+
+      if (sedPoint) {
+        const id = uniqueRedcadId(sedId, usedIds);
+        nodes.push({ id, point: sedPoint, attrs: sedAttrs, type: 'SED' });
+        rows.push(redcadStructureRow({
+          id,
+          parentId: '',
+          code: id,
+          zoneBand: sedPoint.zoneBand,
+          x: sedPoint.x,
+          y: sedPoint.y,
+          tipoRed: 'RP',
+          sedCode: codigoSED,
+          sedName,
+          sedType: [sedPower ? `${sedPower}kVA` : '', sedVoltage].filter(Boolean).join('-') || sedType,
+          armadoBT: '',
+          soporte: normalizarSoporteRedcad(sedAttrs),
+          cantidadSoportes: cantidadSoportesPoste(sedAttrs),
+          conductor: '',
+          sistemaLinea: '',
+          comentario: `Subestacion ${sedName}`
+        }));
+      }
+
+      datos.circuitosBT.forEach((feature, index) => {
+        const attrs = feature.attributes || {};
+        const point = redcadPointFromGeometry(feature.geometry, context);
+        if (!point) return;
+        const id = uniqueRedcadId(getValue(attrs, ['SAL_COD_SAL', 'SAL_NOM_SAL', 'OBJECTID'], `SAL${index + 1}`), usedIds);
+        nodes.push({ id, point, attrs, type: 'SAL' });
+        rows.push(redcadStructureRow({
+          id,
+          parentId: sedId,
+          code: id,
+          zoneBand: point.zoneBand,
+          x: point.x,
+          y: point.y,
+          tipoRed: 'RP',
+          sedCode: codigoSED,
+          sedName,
+          sedType,
+          protecciones: getTipoProteccion(getValue(attrs, ['SAL_EQP_TIP'], '')),
+          conductor: '',
+          sistemaLinea: redcadSistemaLinea(attrs),
+          comentario: `Salida BT ${textoRedcad(getValue(attrs, ['SAL_NOM_SAL'], id))}`
+        }));
+      });
+
+      datos.postesBT.forEach((feature, index) => {
+        const attrs = feature.attributes || {};
+        const point = redcadPointFromGeometry(feature.geometry, context);
+        if (!point) return;
+        const id = uniqueRedcadId(getValue(attrs, ['NOD_COD_NOD', 'OBJECTID'], `P${index + 1}`), usedIds);
+        nodes.push({ id, point, attrs, type: 'POSTE' });
+        rows.push(redcadStructureRow({
+          id,
+          parentId: sedId,
+          code: id,
+          zoneBand: point.zoneBand,
+          x: point.x,
+          y: point.y,
+          tipoRed: 'RS',
+          sedCode: codigoSED,
+          sedName,
+          sedType,
+          armadoBT: armadoRedcad(attrs),
+          soporte: normalizarSoporteRedcad(attrs),
+          cantidadSoportes: cantidadSoportesPoste(attrs),
+          pat: tieneBanderaSi(attrs, ['NOD_ATER', 'NOD_FLG_ATER', 'NOD_FLAG_ATER']) ? `${id}-PAT` : '',
+          conductor: '',
+          sistemaLinea: '',
+          comentario: [
+            textoRedcad(getFuncionEstructura(getValue(attrs, ['NOD_COD_FNC'], ''))),
+            textoRedcad(getEstadoConservacion(getValue(attrs, ['NOD_EST_CONS'], '')))
+          ].filter(Boolean).join(' | ')
+        }));
+      });
+
+      datos.tramosBT.forEach((feature, featureIndex) => {
+        const attrs = feature.attributes || {};
+        const paths = pathsToLatLngs(feature.geometry);
+        const conductor = conductorRedcad(attrs);
+        const sistemaLinea = redcadSistemaLinea(attrs);
+        paths.forEach((path, pathIndex) => {
+          let parentId = sedId;
+          path.forEach((latlng, vertexIndex) => {
+            const point = redcadPointFromLatLng(latlng, context);
+            if (!point) return;
+            const near = findNearestRedcadNode(point, nodes, 1.5);
+            const baseId = near?.id || `${getValue(attrs, ['TBT_COD_TBT', 'OBJECTID'], `TBT${featureIndex + 1}`)}_${pathIndex + 1}_${vertexIndex + 1}`;
+            const id = near?.id || uniqueRedcadId(baseId, usedIds);
+            if (!near) {
+              nodes.push({ id, point, attrs, type: 'VERTICE' });
+              rows.push(redcadStructureRow({
+                id,
+                parentId,
+                code: id,
+                zoneBand: point.zoneBand,
+                x: point.x,
+                y: point.y,
+                tipoRed: vertexIndex === 0 ? 'LP' : 'RS',
+                sedCode: codigoSED,
+                sedName,
+                sedType,
+                armadoBT: '',
+                soporte: '',
+                cantidadSoportes: '',
+                conductor,
+                sistemaLinea,
+                esVanoFlojo: esVanoFlojoRedcad(attrs),
+                comentario: `Tramo ${textoRedcad(getValue(attrs, ['TBT_COD_TBT'], featureIndex + 1))}`
+              }));
+            }
+            parentId = id;
+          });
+        });
+      });
+
+      const acometidasRows = [[''], REDCAD_ACOMETIDAS_HEADER];
+      datos.suministros.forEach((feature, index) => {
+        const attrs = feature.attributes || {};
+        const point = redcadPointFromGeometry(feature.geometry, context);
+        if (!point) return;
+        const parent = findNearestRedcadNode(point, nodes, Number.POSITIVE_INFINITY);
+        const code = textoRedcad(getValue(attrs, ['SUM_COD_SUM', 'OBJECTID'], `SUM${index + 1}`));
+        const name = textoRedcad(getValue(attrs, ['SUM_NOM_SUM', 'SUM_DIR_SUM'], code));
+        acometidasRows.push([
+          parent?.id || sedId,
+          index + 1,
+          point.x,
+          point.y,
+          'Corta',
+          parent ? redondear(distanciaRedcad(parent.point, point), 3) : '',
+          '',
+          accesorioAcometidaRedcad(attrs),
+          cargaAcometidaRedcad(attrs, code),
+          name || code,
+          potenciaSuministroKw(attrs),
+          factorSimultaneidadRedcad(attrs)
+        ]);
+      });
+
+      return { estructurasRows: rows, acometidasRows };
+    }
+
+    function crearContextoRedcad(datos, zone) {
+      const points = [];
+      const collectPoint = geometry => {
+        const latlng = pointToLatLng(geometry);
+        if (latlng) points.push(latlng);
+      };
+      collectPoint(datos.subestacion?.geometry);
+      datos.suministros.forEach(feature => collectPoint(feature.geometry));
+      datos.circuitosBT.forEach(feature => collectPoint(feature.geometry));
+      datos.postesBT.forEach(feature => collectPoint(feature.geometry));
+      datos.tramosBT.forEach(feature => pathsToLatLngs(feature.geometry).forEach(path => path.forEach(point => points.push(point))));
+      const projected = points
+        .map(([lat, lon]) => ({ lat, lon, utm: wgs84ToUtm(lat, lon, zone) }))
+        .filter(item => Number.isFinite(item.utm.easting) && Number.isFinite(item.utm.northing));
+      const originE = Math.min(...projected.map(item => item.utm.easting), 0) - 20;
+      const originN = Math.min(...projected.map(item => item.utm.northing), 0) - 20;
+      const refLat = projected[0]?.lat ?? -15;
+      return {
+        zone,
+        band: getUtmBandFromLat(refLat),
+        originE,
+        originN
+      };
+    }
+
+    function redcadPointFromGeometry(geometry, context) {
+      return redcadPointFromLatLng(pointToLatLng(geometry), context);
+    }
+
+    function redcadPointFromLatLng(latlng, context) {
+      if (!latlng) return null;
+      const [lat, lon] = latlng;
+      const utm = wgs84ToUtm(lat, lon, context.zone);
+      return {
+        x: redondear(utm.easting - context.originE, 3),
+        y: redondear(utm.northing - context.originN, 3),
+        easting: utm.easting,
+        northing: utm.northing,
+        zoneBand: `${utm.zone}${getUtmBandFromLat(lat) || context.band}`
+      };
+    }
+
+    function redcadStructureRow(data) {
+      return [
+        data.id || '',
+        data.parentId || '',
+        data.code || data.id || '',
+        data.zoneBand || '',
+        data.x ?? '',
+        data.y ?? '',
+        data.tipoRed || '',
+        data.sedCode || '',
+        data.sedName || '',
+        data.sedType || '',
+        data.armadoMT1 || '',
+        data.armadoMT2 || '',
+        data.armadoBT || '',
+        data.armadoBT2 || '',
+        data.soporte || '',
+        data.cantidadSoportes ?? '',
+        data.pat || '',
+        data.retenidas || '',
+        data.cajasDerivacion || '',
+        data.puntoIluminacion || '',
+        data.protecciones || '',
+        data.cimentacion || 'CM',
+        data.terreno || 'I',
+        data.accesibilidad || 'TA',
+        data.conductor || '',
+        data.sistemaLinea || '',
+        data.esVanoFlojo || '',
+        data.comentario || ''
+      ];
+    }
+
+    function uniqueRedcadId(value, usedIds) {
+      const base = limpiarIdRedcad(value || 'ID');
+      let id = base;
+      let counter = 2;
+      while (usedIds.has(id)) {
+        id = `${base}_${counter}`;
+        counter += 1;
+      }
+      usedIds.add(id);
+      return id;
+    }
+
+    function limpiarIdRedcad(value) {
+      return textoRedcad(value)
+        .replace(/[^A-Z0-9_-]/gi, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .substring(0, 24) || 'ID';
+    }
+
+    function textoRedcad(value) {
+      return String(value ?? '')
+        .replace(/\r?\n/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function normalizarSoporteRedcad(attrs) {
+      const altura = parseMetricNumber(getValue(attrs, ['NOD_ALT_SPT', 'SED_ALT_SPT'], 0));
+      const esfuerzo = textoRedcad(getValue(attrs, ['NOD_ESF_SPT', 'SED_ESF_SPT'], ''));
+      if (altura && esfuerzo) return `${altura}/${esfuerzo}`;
+      if (altura) return `${altura}`;
+      return textoRedcad(getValue(attrs, ['NOD_COD_TIP_SPT', 'NOD_DSC_TIP_SPT'], ''));
+    }
+
+    function armadoRedcad(attrs) {
+      const codes = [];
+      for (let i = 1; i <= 4; i += 1) {
+        const suffix = String(i).padStart(2, '0');
+        const code = textoRedcad(getValue(attrs, [`NOD_COD_TIP_ARM_${suffix}`], ''));
+        if (code && code !== 'N/A') codes.push(code);
+      }
+      return codes.join(',');
+    }
+
+    function conductorRedcad(attrs) {
+      const material = textoRedcad(getValue(attrs, ['TBT_SP_MAT_CND', 'TBT_AP_MAT_CND', 'TBT_COD_MAT_COND'], ''));
+      const section = textoRedcad(getValue(attrs, ['TBT_SP_SEC_CND', 'TBT_AP_SEC_CND', 'TBT_SEC_CND'], ''));
+      const conductors = textoRedcad(getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND', 'TBT_NRO_CND'], ''));
+      return [conductors, material, section].filter(Boolean).join(' ');
+    }
+
+    function redcadSistemaLinea(attrs) {
+      const raw = textoRedcad(getValue(attrs, ['TBT_COD_TEC_FAS', 'TBT_SP_COD_FAS', 'TBT_AP_COD_FAS', 'TBT_COD_FAS', 'SAL_COD_FAS'], ''));
+      const conductors = parseMetricNumber(getValue(attrs, ['TBT_SP_NRO_CND', 'TBT_AP_NRO_CND', 'TBT_NRO_CND'], 0));
+      if (conductors) return redondear(conductors / 100, 2);
+      if (/TRI|3F|ABC|RST|3/i.test(raw)) return 0.14;
+      if (/BI|2F|AB|AC|BC|2/i.test(raw)) return 0.1;
+      if (/MONO|1F|1/i.test(raw)) return 0.06;
+      return '';
+    }
+
+    function esVanoFlojoRedcad(attrs) {
+      return tieneBanderaSi(attrs, ['TBT_VAN_FLJ', 'TBT_FLG_VAN_FLJ']) ? 'Si' : '';
+    }
+
+    function accesorioAcometidaRedcad(attrs) {
+      return textoRedcad(getValue(attrs, ['SUM_ACC_ACO', 'SUM_TIP_ACO'], 'Murete existente'));
+    }
+
+    function cargaAcometidaRedcad(attrs, fallback) {
+      const fase = textoRedcad(getValue(attrs, ['SUM_MED_FAS', 'SUM_COD_FAS'], '1'));
+      const tipo = textoRedcad(getValue(attrs, ['SUM_TIP_SRV', 'SUM_TAR_SUM'], ''));
+      if (/3|TRI/i.test(fase)) return `Carga 3ø${tipo ? ` - ${tipo}` : ''}`;
+      if (/2|BI/i.test(fase)) return `Carga 2ø${tipo ? ` - ${tipo}` : ''}`;
+      return `Carga 1ø${tipo ? ` - ${tipo}` : fallback ? ` - ${fallback}` : ''}`;
+    }
+
+    function potenciaSuministroKw(attrs) {
+      const value = parseMetricNumber(getValue(attrs, ['SUM_MAX_DEM', 'SUM_POT_CON', 'SUM_POT_EQT'], 0));
+      return value || '';
+    }
+
+    function factorSimultaneidadRedcad(attrs) {
+      const value = parseMetricNumber(getValue(attrs, ['SUM_FAC_SIM', 'SUM_FS'], 0));
+      return value || '';
+    }
+
+    function findNearestRedcadNode(point, nodes, maxDistance) {
+      let best = null;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      nodes.forEach(node => {
+        const distance = distanciaRedcad(point, node.point);
+        if (distance < bestDistance) {
+          best = node;
+          bestDistance = distance;
+        }
+      });
+      return best && bestDistance <= maxDistance ? best : null;
+    }
+
+    function distanciaRedcad(a, b) {
+      return Math.hypot((a?.x || 0) - (b?.x || 0), (a?.y || 0) - (b?.y || 0));
+    }
+
+    function construirFilasSolutionsCircuitosBT(circuitosBT, zone) {
+      const rows = [
+        ['Código salida', 'Nombre', 'Latitud WGS84', 'Longitud WGS84', 'Este UTM', 'Norte UTM', 'Zona UTM', 'Tipo servicio', 'Tensión nominal', 'Corriente nominal', 'Capacidad', 'Fase', 'Equipo protección', 'Marca', 'Modelo', 'Estado equipo']
+      ];
+
+      circuitosBT.forEach(feature => {
+        const attrs = feature.attributes || {};
+        const c = coordDataFromGeometry(feature.geometry, zone);
+        rows.push([
+          getValue(attrs, ['SAL_COD_SAL']),
+          getValue(attrs, ['SAL_NOM_SAL']),
+          c.lat,
+          c.lon,
+          c.easting,
+          c.northing,
+          c.zone,
+          getTipoServicio(getValue(attrs, ['SAL_TIP_SRV'], 'N/A')),
+          getValue(attrs, ['SAL_TEN_NOM']),
+          getValue(attrs, ['SAL_COR_NOM']),
+          getValue(attrs, ['SAL_CAP_AMP']),
+          getValue(attrs, ['SAL_COD_FAS', 'SAL_SP_COD_FAS', 'SAL_AP_COD_FAS']),
+          getTipoProteccion(getValue(attrs, ['SAL_EQP_TIP'], 'N/A')),
+          getValue(attrs, ['SAL_EQP_MAR']),
+          getValue(attrs, ['SAL_EQP_MOD']),
+          getEstadoConservacion(getValue(attrs, ['SAL_EQP_EST'], 'N/A'))
+        ]);
+      });
+
+      if (rows.length === 1) rows.push(['Sin circuitos BT asociados a esta SED']);
+      return rows;
+    }
+
+    function construirFilasSolutionsCapasDxf() {
+      return [
+        ['Capa DXF REDCAD', 'Contenido', 'Uso recomendado'],
+        ['BT_TRAFO', 'Subestación/transformador', 'Ubicar la SED y revisar datos del bloque principal.'],
+        ['BT_CIRCUITOS', 'Puntos de salida BT', 'Verificar salidas y protección.'],
+        ['BT_LINEAS_AEREAS', 'Tramos BT aéreos', 'Revisar continuidad de red aérea.'],
+        ['BT_LINEAS_SUBT', 'Tramos BT subterráneos', 'Revisar red subterránea si existe.'],
+        ['BT_POSTES', 'Postes BT', 'Cruzar con REDLIN_Postes_BT.'],
+        ['BT_SUMINISTROS', 'Suministros', 'Validar distribución de cargas.'],
+        ['BT_RETENIDAS', 'Retenidas', 'Revisar anclajes y orientación.'],
+        ['BT_PUESTA_TIERRA', 'Puestas a tierra', 'Validar PAT de postes y SED.'],
+        ['BT_VANOS', 'Longitudes de vanos', 'Revisar metrado visual.'],
+        ['BT_FRAME', 'Marco, leyenda y resumen', 'Mantener en el plano final salvo ajuste de presentación.']
+      ];
     }
 
     function construirLibroReporteMetrado(codigoSED, datos) {
@@ -4355,5 +5661,8 @@
   </script>
   <script src="reportedxf.js"></script>
   <script src="assets/js/kmz/reporte-kmz-redlin.js"></script>
+  <script src="assets/js/solutions/export-solutions.js"></script>
+  <script src="assets/js/solutions/redcad-template.js"></script>
+  <script src="assets/js/solutions/exportar-redcad.js"></script>
 </body>
 </html>

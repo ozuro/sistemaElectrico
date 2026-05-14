@@ -1,0 +1,58 @@
+[2026-05-14T00:16:52.074Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T00:16:52.080Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-14T00:17:28.804Z] PowerShell error 1: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede convertir un objeto de tipo 
+'System.Int32' al tipo 'System.String'.
+    + CategoryInfo          : OperationStopped: (:) [exportar_redcad_com.ps1], InvalidCastException
+    + FullyQualifiedErrorId : System.InvalidCastException,exportar_redcad_com.ps1
+[2026-05-14T00:17:28.806Z] Export error: Error: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede convertir un objeto de tipo 
+'System.Int32' al tipo 'System.String'.
+    + CategoryInfo          : OperationStopped: (:) [exportar_redcad_com.ps1], InvalidCastException
+    + FullyQualifiedErrorId : System.InvalidCastException,exportar_redcad_com.ps1
+    at ChildProcess.<anonymous> (C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva carpeta\sistema_redes_existentes_carbao\tools\redcad_local_server.js:64:16)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1105:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5)
+[2026-05-14T00:18:53.264Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T00:18:53.269Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-14T00:18:59.855Z] PowerShell error 1: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede convertir un objeto de tipo 
+'System.Int32' al tipo 'System.String'.
+    + CategoryInfo          : OperationStopped: (:) [exportar_redcad_com.ps1], InvalidCastException
+    + FullyQualifiedErrorId : System.InvalidCastException,exportar_redcad_com.ps1
+[2026-05-14T00:18:59.856Z] Export error: Error: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede convertir un objeto de tipo 
+'System.Int32' al tipo 'System.String'.
+    + CategoryInfo          : OperationStopped: (:) [exportar_redcad_com.ps1], InvalidCastException
+    + FullyQualifiedErrorId : System.InvalidCastException,exportar_redcad_com.ps1
+    at ChildProcess.<anonymous> (C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva carpeta\sistema_redes_existentes_carbao\tools\redcad_local_server.js:64:16)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1105:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5)
+[2026-05-14T00:19:31.580Z] PowerShell error 1: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede convertir un objeto de tipo 
+'System.Int32' al tipo 'System.String'.
+    + CategoryInfo          : OperationStopped: (:) [exportar_redcad_com.ps1], InvalidCastException
+    + FullyQualifiedErrorId : System.InvalidCastException,exportar_redcad_com.ps1
+[2026-05-14T00:19:31.581Z] Export error: Error: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede convertir un objeto de tipo 
+'System.Int32' al tipo 'System.String'.
+    + CategoryInfo          : OperationStopped: (:) [exportar_redcad_com.ps1], InvalidCastException
+    + FullyQualifiedErrorId : System.InvalidCastException,exportar_redcad_com.ps1
+    at ChildProcess.<anonymous> (C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva carpeta\sistema_redes_existentes_carbao\tools\redcad_local_server.js:64:16)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1105:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5)
+[2026-05-14T00:22:40.900Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T00:22:40.906Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-14T01:01:28.438Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T01:01:28.443Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-14T01:21:44.340Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T01:21:44.345Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-14T01:26:36.241Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T01:26:36.246Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-14T01:49:20.592Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T01:49:20.598Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-14T02:38:59.793Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-14T02:38:59.800Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
