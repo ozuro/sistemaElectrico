@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Descarga OSM por UBIGEO</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #1f2937;
+      background: #eef2f7;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      background: #f8fafc;
+      box-shadow: 0 2px 12px rgba(15, 23, 42, 0.14);
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-right: 6px;
+      color: #075985;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+
+    input, select, button {
+      height: 40px;
+      border-radius: 8px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    input, select {
+      border: 1px solid #cbd5e1;
+      background: #fff;
+      padding: 0 12px;
+    }
+
+    #ubigeoInput {
+      width: 175px;
+      font-weight: 700;
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 0;
+      padding: 0 14px;
+      color: #fff;
+      background: linear-gradient(135deg, #0f766e, #0ea5e9);
+      font-weight: 800;
+      cursor: pointer;
+      text-transform: uppercase;
+    }
+
+    button:disabled {
+      opacity: 0.58;
+      cursor: wait;
+    }
+
+    .secondary {
+      background: linear-gradient(135deg, #334155, #64748b);
+    }
+
+    .hint {
+      margin-left: auto;
+      font-size: 12px;
+      color: #475569;
+    }
+
+    #map {
+      min-height: 360px;
+    }
+
+    .status {
+      position: fixed;
+      left: 14px;
+      bottom: 14px;
+      max-width: min(620px, calc(100vw - 28px));
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.92);
+      color: #fff;
+      font-size: 13px;
+      line-height: 1.4;
+      z-index: 1000;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.22);
+    }
+
+    .status.ok { background: rgba(22, 101, 52, 0.94); }
+    .status.warn { background: rgba(180, 83, 9, 0.95); }
+    .status.error { background: rgba(153, 27, 27, 0.95); }
+
+    @media (max-width: 760px) {
+      .toolbar {
+        align-items: stretch;
+      }
+
+      .brand, .hint {
+        width: 100%;
+      }
+
+      input, select, button {
+        flex: 1 1 150px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="brand"><i class="fas fa-map-location-dot"></i> OSM por UBIGEO</div>
+    <input id="ubigeoInput" type="text" inputmode="numeric" maxlength="6" placeholder="UBIGEO distrito">
+    <select id="modeInput" title="Tipo de descarga">
+      <option value="roads">Solo vias</option>
+      <option value="all">Vias + hidrografia</option>
+    </select>
+    <button id="downloadBtn" type="button"><i class="fas fa-download"></i> Descargar</button>
+    <button id="roadWidthBtn" type="button" title="Descargar DXF con dos bordes laterales de calles en metros"><i class="fas fa-road"></i> Calles m</button>
+    <button class="secondary" type="button" onclick="window.location.href='../index.html'"><i class="fas fa-arrow-left"></i> Volver</button>
+    <div class="hint">Genera <strong>base_osm_UBIGEO.dxf</strong>, <strong>base_osm_UBIGEO.geojson</strong> y bordes de calle</div>
+  </div>
+  <div id="map"></div>
+  <div id="status" class="status">Ingrese un UBIGEO de distrito de Peru. Para Puno se fuerza UTM zona 19 sur.</div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+  <script src="osm-ubigeo.js"></script>
+  <script src="osm-road-widths.js"></script>
+</body>
+</html>

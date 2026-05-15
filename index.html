@@ -18,6 +18,7 @@
     }
   </script>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     html, body {
@@ -503,6 +504,14 @@
 
     <button onclick="abrirVistaExportSolutions()" class="btn-bt" title="Guía y archivos para Topomagic, REDLIN y REDCAD">
       <i class="fas fa-route"></i> Solutions
+    </button>
+
+    <button onclick="iniciarProyeccionLpMtGeneral()" class="btn-bt" title="Trazar o cargar proyeccion LP/MT general">
+      <i class="fas fa-project-diagram"></i> Proyectar LP/MT
+    </button>
+
+    <button onclick="abrirDescargaOsmUbigeo()" class="btn-bt" title="Descargar vias e hidrografia OSM por UBIGEO">
+      <i class="fas fa-map-location-dot"></i> OSM UBIGEO
     </button>
     
     <input type="file" id="inputArchivo" accept=".csv" onchange="cargarDesdeExcel()" title="Cargar archivo CSV">
@@ -1771,6 +1780,9 @@
               <button onclick="abrirVistaExportSolutions('${id}')" class="btn-popup-bt popup-button-wide">
                 <i class="fas fa-route"></i> Exportar Programa Solutions
               </button>
+              <button onclick="abrirRedcadDesignerProyecciones('${id}')" class="btn-popup-bt popup-button-wide">
+                <i class="fas fa-project-diagram"></i> Proyectar BT desde esta SED
+              </button>
             </div>
           `;
 
@@ -2401,6 +2413,204 @@
 
     function esperarSolutions(ms) {
       return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function abrirDescargaOsmUbigeo() {
+      const input = document.getElementById('inputUbigeo');
+      const ubigeo = (input?.value || '').split(',').map(value => value.trim()).filter(Boolean)[0] || '';
+      const url = `ubigeo_osm/index.html${ubigeo ? `?ubigeo=${encodeURIComponent(ubigeo)}` : ''}`;
+      window.open(url, '_blank');
+    }
+
+    async function abrirRedcadDesignerProyecciones(codigoSED = '') {
+      const codigo = String(
+        codigoSED ||
+        transformadorSeleccionado ||
+        window.transformadorSeleccionado ||
+        document.getElementById('inputID')?.value ||
+        ''
+      ).trim();
+
+      if (!codigo) {
+        showNotification('Seleccione una subestación o ingrese el código SED para hacer proyectadas.', 'error', 7000);
+        return;
+      }
+
+      transformadorSeleccionado = codigo;
+      window.transformadorSeleccionado = codigo;
+      const input = document.getElementById('inputID');
+      if (input) input.value = codigo;
+
+      showLoadingMessage(`Preparando diseñador de proyectadas para la SED ${codigo}...`);
+      try {
+        const project = await construirProyectoRedcadDesignerDesdeArcgis(codigo);
+        const seed = JSON.stringify(project);
+        sessionStorage.setItem('redcadDesignerSeedProject', seed);
+        localStorage.setItem('redcadDesignerSeedProject', seed);
+        window.open(`redcad-designer/index.html?sed=${encodeURIComponent(codigo)}&source=arcgis`, '_blank');
+        showNotification(`Red ArcGIS enviada al diseñador: ${codigo}`, 'success', 6000);
+      } catch (error) {
+        console.error('Error al abrir RedCAD Designer:', error);
+        showNotification(`Error al preparar proyectadas: ${error.message}`, 'error', 9000);
+      } finally {
+        hideLoadingMessage();
+      }
+    }
+
+    async function construirProyectoRedcadDesignerDesdeArcgis(codigoSED) {
+      const [
+        subestaciones,
+        suministros,
+        circuitosBT,
+        postesBT,
+        tramosBT
+      ] = await Promise.all([
+        consultarArcgisReporte(96, whereEquals('SED_COD_SED', codigoSED), true),
+        consultarArcgisReporte(24, whereEquals('SUM_COD_SED', codigoSED), true),
+        consultarArcgisReporte(25, whereEquals('SAL_COD_SED', codigoSED), true),
+        consultarArcgisReporte(27, whereEquals('NOD_COD_SED', codigoSED), true),
+        consultarArcgisReporte(33, whereEquals('TBT_COD_SED', codigoSED), true)
+      ]);
+
+      if (!subestaciones.length) {
+        throw new Error(`No se encontró la SED ${codigoSED} en ArcGIS.`);
+      }
+
+      const substationItems = subestaciones.map((feature, index) => {
+        const attrs = feature.attributes || {};
+        return redcadDesignerPointFromGeometry(feature.geometry, {
+          id: getValue(attrs, ['SED_COD_SED', 'OBJECTID'], `SED_${index + 1}`),
+          name: getValue(attrs, ['SED_NOM_SED', 'SED_COD_SED'], `SED ${index + 1}`),
+          type: 'substation',
+          source: 'ArcGIS Electro Puno',
+          attrs
+        });
+      }).filter(Boolean);
+
+      const poleItems = postesBT.map((feature, index) => {
+        const attrs = feature.attributes || {};
+        return redcadDesignerPointFromGeometry(feature.geometry, {
+          id: getValue(attrs, ['NOD_COD_NOD', 'OBJECTID'], `PBT_${index + 1}`),
+          name: getValue(attrs, ['NOD_COD_NOD', 'NOD_NOM_SAL'], `Poste BT ${index + 1}`),
+          type: 'pole',
+          source: 'ArcGIS Electro Puno',
+          attrs
+        });
+      }).filter(Boolean);
+
+      const clientItems = suministros.map((feature, index) => {
+        const attrs = feature.attributes || {};
+        return redcadDesignerPointFromGeometry(feature.geometry, {
+          id: getValue(attrs, ['SUM_COD_SUM', 'OBJECTID'], `SUM_${index + 1}`),
+          name: getValue(attrs, ['SUM_NOM_SUM', 'SUM_DIR_SUM', 'SUM_COD_SUM'], `Cliente ${index + 1}`),
+          type: 'client',
+          source: 'ArcGIS Electro Puno',
+          demandKw: redcadDesignerNumber(getValue(attrs, ['SUM_MAX_DEM', 'SUM_POT_EQT'], 0)),
+          attrs
+        });
+      }).filter(Boolean);
+
+      const btLines = tramosBT.flatMap((feature, index) => {
+        const attrs = feature.attributes || {};
+        return redcadDesignerLinesFromGeometry(feature.geometry, {
+          id: getValue(attrs, ['TBT_COD_TBT', 'OBJECTID'], `TBT_${index + 1}`),
+          name: getValue(attrs, ['TBT_NOM_SAL', 'TBT_COD_SAL', 'TBT_COD_TBT'], `Tramo BT ${index + 1}`),
+          type: 'bt',
+          source: 'ArcGIS Electro Puno',
+          attrs
+        });
+      });
+
+      const mtLpLines = circuitosBT.flatMap((feature, index) => {
+        const attrs = feature.attributes || {};
+        return redcadDesignerLinesFromGeometry(feature.geometry, {
+          id: getValue(attrs, ['SAL_COD_SAL', 'OBJECTID'], `SAL_${index + 1}`),
+          name: getValue(attrs, ['SAL_NOM_SAL', 'SAL_COD_SAL'], `Salida BT ${index + 1}`),
+          type: 'bt_reference',
+          source: 'ArcGIS Electro Puno',
+          attrs
+        });
+      });
+
+      return {
+        schema: 'redcad-designer-project-v1',
+        exportedAt: new Date().toISOString(),
+        project: {
+          name: `Proyectadas desde ArcGIS - ${codigoSED}`,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          source: 'ArcGIS Electro Puno'
+        },
+        rules: {
+          btMaxSpanMeters: 75,
+          mtLpMaxSpanMeters: 140,
+          serviceDropMaxMeters: 25,
+          designHorizonYears: 20,
+          annualGrowthRate: 0.03,
+          duplicatePoleToleranceMeters: 1
+        },
+        existingNetwork: {
+          substations: substationItems,
+          poles: poleItems,
+          btLines,
+          mtLpLines,
+          serviceDrops: [],
+          clients: clientItems
+        },
+        newClients: [],
+        parentSubstationId: substationItems[0]?.id || codigoSED,
+        parentSubstationAction: 'dividir',
+        projected: {
+          childSubstations: [],
+          clientAssignments: {},
+          references: { bt: [], mt: [], lp: [] },
+          poles: [],
+          lines: [],
+          serviceDrops: []
+        },
+        validations: [],
+        warnings: [],
+        catalogs: {
+          source: 'Pendiente de cargar catalogos RedCAD reales'
+        }
+      };
+    }
+
+    function redcadDesignerPointFromGeometry(geometry, base) {
+      const latlng = pointToLatLng(geometry);
+      if (!latlng) return null;
+      const [lat, lon] = latlng;
+      const utm = wgs84ToUtm(lat, lon, 19);
+      return {
+        ...base,
+        lat,
+        lon,
+        x: redondear(utm.easting, 3),
+        y: redondear(utm.northing, 3),
+        zone: '19L'
+      };
+    }
+
+    function redcadDesignerLinesFromGeometry(geometry, base) {
+      return pathsToLatLngs(geometry).map((path, index) => ({
+        ...base,
+        id: index ? `${base.id}_${index + 1}` : base.id,
+        points: path.map(([lat, lon]) => {
+          const utm = wgs84ToUtm(lat, lon, 19);
+          return {
+            lat,
+            lon,
+            x: redondear(utm.easting, 3),
+            y: redondear(utm.northing, 3),
+            zone: '19L'
+          };
+        })
+      })).filter((line) => line.points.length > 1);
+    }
+
+    function redcadDesignerNumber(value) {
+      const parsed = Number(String(value ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
+      return Number.isFinite(parsed) ? parsed : 0;
     }
 
     function descargarTexto(filename, text, type = 'text/plain;charset=utf-8;') {
@@ -5664,5 +5874,6 @@
   <script src="assets/js/solutions/export-solutions.js"></script>
   <script src="assets/js/solutions/redcad-template.js"></script>
   <script src="assets/js/solutions/exportar-redcad.js"></script>
+  <script src="assets/js/proyectadas/proyectadas-guiadas.js"></script>
 </body>
 </html>

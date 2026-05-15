@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RedCAD Designer - Proyectadas</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="css/redcad-designer.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <strong>RedCAD Designer</strong>
+      <span>Proyectadas BT/MT desde red existente</span>
+    </div>
+    <div id="projectStatus">Proyecto nuevo</div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel left-panel">
+      <section>
+        <h2>Importar datos</h2>
+        <label class="file-row">KMZ/KML existente <input id="existingKmzInput" type="file" accept=".kmz,.kml"></label>
+        <label class="file-row">Clientes nuevos Excel/CSV <input id="newClientsInput" type="file" accept=".xlsx,.xls,.csv"></label>
+        <label class="file-row">Proyecto JSON <input id="projectJsonInput" type="file" accept=".json"></label>
+      </section>
+
+      <section>
+        <h2>Reglas base</h2>
+        <label>Vano max. BT (m)<input id="ruleBtSpan" type="number" value="75" min="20" step="1"></label>
+        <label>Vano max. LP/MT (m)<input id="ruleMtSpan" type="number" value="140" min="40" step="1"></label>
+        <label>Acometida max. (m)<input id="ruleServiceDrop" type="number" value="25" min="5" step="1"></label>
+        <button id="saveRulesBtn" type="button">Guardar reglas</button>
+      </section>
+
+      <section>
+        <h2>Capas</h2>
+        <div id="layerPanel" class="mini-list"></div>
+      </section>
+    </aside>
+
+    <section class="map-shell">
+      <div id="map"></div>
+      <div class="map-tools">
+        <button id="drawSedChildBtn" type="button">Crear SED hija</button>
+        <button id="assignNearestBtn" type="button">Asignar clientes por cercania</button>
+        <button id="generatePrelimBtn" type="button">Hacer proyectadas</button>
+      </div>
+    </section>
+
+    <aside class="panel right-panel">
+      <section>
+        <h2>Subestacion padre</h2>
+        <div id="sedPanel" class="empty">Cargue KMZ/KML y seleccione una SED en el mapa.</div>
+      </section>
+
+      <section>
+        <h2>SED proyectadas hijas</h2>
+        <div id="childSedPanel" class="mini-list"></div>
+      </section>
+
+      <section>
+        <h2>Clientes</h2>
+        <div id="clientPanel" class="mini-list"></div>
+      </section>
+
+      <section>
+        <h2>Validaciones</h2>
+        <div id="validationPanel" class="mini-list"></div>
+      </section>
+
+      <section>
+        <h2>Exportar</h2>
+        <button id="exportProjectBtn" type="button">Exportar JSON proyecto</button>
+        <button id="exportKmzBtn" type="button">Exportar KMZ proyectado</button>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
