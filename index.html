@@ -19,6 +19,7 @@
   </script>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     html, body {
@@ -180,6 +181,80 @@
       overflow: auto;
       backdrop-filter: blur(10px);
       box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    }
+
+    #joystick3D {
+      position: absolute;
+      right: 28px;
+      bottom: 28px;
+      z-index: 1002;
+      width: 168px;
+      height: 168px;
+      border-radius: 50%;
+      background: rgba(9, 17, 31, 0.76);
+      border: 1px solid rgba(255,255,255,0.22);
+      box-shadow: 0 12px 32px rgba(0,0,0,0.32);
+      backdrop-filter: blur(10px);
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 7px;
+      padding: 14px;
+      user-select: none;
+    }
+
+    #joystick3D button {
+      border: 0;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.14);
+      color: white;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+    }
+
+    #joystick3D button:hover,
+    #joystick3D button.active {
+      background: #0d6efd;
+    }
+
+    #joystick3D .joy-center {
+      border-radius: 50%;
+      background: rgba(255,255,255,0.24);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255,255,255,.9);
+    }
+
+    #joystick3DVertical {
+      position: absolute;
+      right: 210px;
+      bottom: 48px;
+      z-index: 1002;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: rgba(9, 17, 31, 0.76);
+      padding: 10px;
+      border-radius: 16px;
+      backdrop-filter: blur(10px);
+    }
+
+    #joystick3DVertical button {
+      width: 42px;
+      height: 42px;
+      border: 0;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.14);
+      color: white;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    #joystick3DVertical button:hover,
+    #joystick3DVertical button.active {
+      background: #0d6efd;
     }
     
     #streetViewPanel {
@@ -455,8 +530,8 @@
   </div>
 
   <header>
-    <h2><i class="fas fa-bolt"></i> CONSORCIO C&G - SISTEMA INTEGRAL DE RED ELÉCTRICA</h2>
-    <h3>"REMODELACIÓN Y AMPLIACIÓN DE REDES DE DISTRIBUCIÓN PRIMARIA Y SECUNDARIA ZONA DE LOS DISTRITOS DE HUATA-COATA-CAPACHICA, PROVINCIA DE PUNO, DEPARTAMENTO DE PUNO"</h3>
+    <h2><i class="fas fa-bolt"></i> SISTEMA ELÉCTRICO DE REMODELACIÓN Y AMPLIACIÓN</h2>
+    <h3>Redes eléctricas de baja tensión y media tensión | OZURO DEV REDQWEB</h3>
   </header>
 
   <div id="panel">
@@ -506,8 +581,8 @@
       <i class="fas fa-route"></i> Solutions
     </button>
 
-    <button onclick="iniciarProyeccionLpMtGeneral()" class="btn-bt" title="Trazar o cargar proyeccion LP/MT general">
-      <i class="fas fa-project-diagram"></i> Proyectar LP/MT
+    <button onclick="iniciarProyeccionLpMtGeneral()" class="btn-bt" title="Trazar o cargar proyecto LP/RP general">
+      <i class="fas fa-project-diagram"></i> Proyectar LP/RP
     </button>
 
     <button onclick="abrirDescargaOsmUbigeo()" class="btn-bt" title="Descargar vias e hidrografia OSM por UBIGEO">
@@ -590,7 +665,7 @@
         <strong><i class="fas fa-layer-group"></i> Base 3D</strong>
       </div>
       <label style="display:block; margin-bottom: 6px;">
-        <input type="checkbox" id="toggleSatellite3D" checked onchange="actualizarCapasBase3D(false)">
+        <input type="checkbox" id="toggleSatellite3D" onchange="actualizarCapasBase3D(false)">
         Satelite
       </label>
       <label style="display:block; margin-bottom: 6px;">
@@ -621,6 +696,21 @@
       <div><i class="fas fa-home"></i> Suministros: <span id="countSupplies3D">0</span></div>
       <div><i class="fas fa-road"></i> Carreteras: <span id="countRoads3D">0</span></div>
       <div><i class="fas fa-mountain"></i> Curvas: <span id="countContours3D">0</span></div>
+    </div>
+    <div id="joystick3D" aria-label="Joystick 3D">
+      <span></span>
+      <button type="button" data-joy3d="forward" title="Avanzar"><i class="fas fa-chevron-up"></i></button>
+      <span></span>
+      <button type="button" data-joy3d="left" title="Mover izquierda"><i class="fas fa-chevron-left"></i></button>
+      <div class="joy-center"><i class="fas fa-location-crosshairs"></i></div>
+      <button type="button" data-joy3d="right" title="Mover derecha"><i class="fas fa-chevron-right"></i></button>
+      <button type="button" data-joy3d="turnLeft" title="Girar izquierda"><i class="fas fa-rotate-left"></i></button>
+      <button type="button" data-joy3d="back" title="Retroceder"><i class="fas fa-chevron-down"></i></button>
+      <button type="button" data-joy3d="turnRight" title="Girar derecha"><i class="fas fa-rotate-right"></i></button>
+    </div>
+    <div id="joystick3DVertical" aria-label="Altura 3D">
+      <button type="button" data-joy3d="up" title="Subir"><i class="fas fa-arrow-up"></i></button>
+      <button type="button" data-joy3d="down" title="Bajar"><i class="fas fa-arrow-down"></i></button>
     </div>
   </div>
 
@@ -663,6 +753,16 @@
     let sistema3DEnCarga = false;
     let sistema3DCargaPromise = null;
     let animacion3DActiva = false;
+    const joystick3DState = {
+      forward: false,
+      back: false,
+      left: false,
+      right: false,
+      turnLeft: false,
+      turnRight: false,
+      up: false,
+      down: false
+    };
     let streetViewActive = false;
     let streetViewMarkers = [];
 
@@ -4874,6 +4974,40 @@
       return cable;
     }
 
+    function conductorCountFromAttrs3D(attrs = {}) {
+      const fase = normalizarTexto(getValue(attrs, ['TBT_COD_TEC_FAS', 'TBT_SP_COD_FAS', 'TBT_AP_COD_FAS', 'TBT_COD_FAS', 'SAL_COD_FAS'], ''));
+      if (/TRI|3F|ABC|RST|R-S-T|R S T|3/.test(fase)) return 3;
+      if (/BI|2F|AB|AC|BC|RS|RT|ST|R-S|R-T|S-T|2/.test(fase)) return 2;
+      return 1;
+    }
+
+    function createCableBundle3D(start, end, attrs, options = {}) {
+      const count = Math.max(1, Math.min(3, conductorCountFromAttrs3D(attrs)));
+      const direction = end.clone().sub(start);
+      const horizontal = new THREE.Vector3(direction.x, 0, direction.z);
+      if (horizontal.length() < 0.001) horizontal.set(1, 0, 0);
+      const normal = new THREE.Vector3(-horizontal.z, 0, horizontal.x).normalize();
+      const spacing = options.spacing || 0.28;
+      const offsets = count === 1 ? [0] : count === 2 ? [-spacing / 2, spacing / 2] : [-spacing, 0, spacing];
+      const group = new THREE.Group();
+      offsets.forEach((offset, index) => {
+        const cable = createCableSpan(
+          start.clone().addScaledVector(normal, offset),
+          end.clone().addScaledVector(normal, offset),
+          {
+            ...options,
+            color: options.color || 0x006eff,
+            radius: options.radius || 0.035
+          }
+        );
+        cable.userData.conductorIndex = index + 1;
+        cable.userData.conductorCount = count;
+        group.add(cable);
+      });
+      group.userData = { type: 'cable_bundle', conductorCount: count };
+      return { group, count };
+    }
+
     function createTransformer3D(point, attrs, codigo) {
       if (window.Red3DObjects?.createMtSubstation) {
         return window.Red3DObjects.createMtSubstation({
@@ -4996,9 +5130,9 @@
       const steelDark = new THREE.MeshStandardMaterial({ color: 0x2f353b, roughness: 0.58, metalness: 0.35 });
 
       supportOffsets.forEach((offsetX) => {
-        const topRadius = materialInfo.isWood ? 0.13 : materialInfo.isSteel ? 0.11 : 0.15;
-        const bottomRadius = materialInfo.isWood ? 0.22 : materialInfo.isSteel ? 0.14 : 0.2;
-        const pole = new THREE.Mesh(new THREE.CylinderGeometry(topRadius, bottomRadius, height, materialInfo.isSteel ? 8 : 12), poleMaterial);
+        const topRadius = materialInfo.isWood ? 0.11 : materialInfo.isSteel ? 0.09 : 0.12;
+        const bottomRadius = materialInfo.isWood ? 0.28 : materialInfo.isSteel ? 0.18 : 0.31;
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(topRadius, bottomRadius, height, materialInfo.isSteel ? 10 : 18), poleMaterial);
         pole.position.set(offsetX, height / 2, 0);
         pole.castShadow = true;
         pole.receiveShadow = true;
@@ -5012,7 +5146,7 @@
             group.add(band);
           }
         } else if (materialInfo.isConcrete) {
-          const baseCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 0.55, 12), collarMaterial);
+          const baseCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.46, 0.68, 18), collarMaterial);
           baseCollar.position.set(offsetX, 0.28, 0);
           baseCollar.castShadow = true;
           group.add(baseCollar);
@@ -5027,6 +5161,12 @@
         cap.position.set(offsetX, height + 0.05, 0);
         cap.castShadow = true;
         group.add(cap);
+
+        const footing = new THREE.Mesh(new THREE.CylinderGeometry(bottomRadius * 1.65, bottomRadius * 1.95, 0.16, 18), collarMaterial);
+        footing.position.set(offsetX, 0.08, 0);
+        footing.castShadow = true;
+        footing.receiveShadow = true;
+        group.add(footing);
       });
 
       if (supportCount === 2) {
@@ -5134,8 +5274,8 @@
       group.position.set(point.x, point.y || 0, point.z);
       group.userData = { type: 'supply', name: codigo };
 
-      const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xd8b45d, roughness: 0.8, metalness: 0.05 });
-      const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.95, metalness: 0.02 });
+      const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x0077ff, roughness: 0.62, metalness: 0.08 });
+      const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x0046b8, roughness: 0.78, metalness: 0.12 });
       const body = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.2, 1.45), wallMaterial);
       body.position.y = 0.6;
       body.castShadow = true;
@@ -5149,7 +5289,8 @@
 
       const label = createLabelSprite(String(codigo || 'SUM'), {
         fontSize: 14,
-        scale: 0.7
+        scale: 0.78,
+        background: 'rgba(0, 68, 180, 0.82)'
       });
       label.position.set(0, 2.9, 0);
       group.add(label);
@@ -5287,9 +5428,9 @@
       camera.near = 0.1;
       camera.far = Math.max(2000, distance * 20);
       camera.updateProjectionMatrix();
-      camera.position.set(center.x + distance, center.y + distance * 0.6 + 12, center.z + distance);
+      camera.position.set(center.x + distance, center.y + distance * 1.05 + 28, center.z + distance);
       if (controls) {
-        controls.target.copy(center);
+        controls.target.copy(center.clone().add(new THREE.Vector3(0, Math.max(8, size.y * 0.35), 0)));
         controls.maxDistance = distance * 4;
         controls.minDistance = Math.max(8, distance * 0.12);
         controls.update();
@@ -5299,6 +5440,62 @@
       if (scene?.fog) {
         scene.fog.near = distance * 1.8;
         scene.fog.far = distance * 8;
+      }
+    }
+
+    function setupJoystick3D() {
+      document.querySelectorAll('[data-joy3d]').forEach((button) => {
+        if (button.dataset.joyReady === '1') return;
+        button.dataset.joyReady = '1';
+        const action = button.dataset.joy3d;
+        const setActive = (active) => {
+          joystick3DState[action] = active;
+          button.classList.toggle('active', active);
+          if (active) start3DAnimation();
+        };
+        button.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          button.setPointerCapture?.(event.pointerId);
+          setActive(true);
+        });
+        button.addEventListener('pointerup', (event) => {
+          button.releasePointerCapture?.(event.pointerId);
+          setActive(false);
+        });
+        button.addEventListener('pointerleave', () => setActive(false));
+        button.addEventListener('pointercancel', () => setActive(false));
+      });
+    }
+
+    function updateJoystick3D() {
+      if (!camera || !controls) return;
+      const moveSpeed = Math.max(0.45, camera.position.distanceTo(controls.target) * 0.018);
+      const turnSpeed = 0.035;
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward);
+      forward.y = 0;
+      if (forward.length() < 0.001) forward.set(0, 0, -1);
+      forward.normalize();
+      const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+      const move = new THREE.Vector3();
+      if (joystick3DState.forward) move.add(forward);
+      if (joystick3DState.back) move.sub(forward);
+      if (joystick3DState.right) move.add(right);
+      if (joystick3DState.left) move.sub(right);
+      if (joystick3DState.up) move.y += 1;
+      if (joystick3DState.down) move.y -= 1;
+      if (move.length() > 0) {
+        move.normalize().multiplyScalar(moveSpeed);
+        camera.position.add(move);
+        controls.target.add(move);
+      }
+
+      const turn = (joystick3DState.turnLeft ? 1 : 0) - (joystick3DState.turnRight ? 1 : 0);
+      if (turn) {
+        const offset = camera.position.clone().sub(controls.target);
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), turn * turnSpeed);
+        camera.position.copy(controls.target).add(offset);
       }
     }
 
@@ -5548,13 +5745,13 @@
             const endHeight = b2d.y + (tipoRed === 'S' ? DEFAULT_SUBTER_HEIGHT : (poleB ? (parseMetricNumber(getValue(poleB.attrs, ['NOD_ALT_SPT'], DEFAULT_POLE_HEIGHT)) || DEFAULT_POLE_HEIGHT) * 0.78 : DEFAULT_AERIAL_HEIGHT));
             const start = new THREE.Vector3(a2d.x, startHeight, a2d.z);
             const end = new THREE.Vector3(b2d.x, endHeight, b2d.z);
-            const cable = createCableSpan(start, end, {
-              color: tipoRed === 'S' ? 0x1f4c89 : tipoRed === 'C' ? 0x2d8ca1 : 0x1f1f1f,
-              radius: tipoRed === 'S' ? 0.028 : 0.045,
+            const bundle = createCableBundle3D(start, end, attrs, {
+              color: tipoRed === 'S' ? 0x1f4c89 : tipoRed === 'C' ? 0x2d8ca1 : 0x006eff,
+              radius: tipoRed === 'S' ? 0.026 : 0.034,
               type: tipoRed,
               opacity: tipoRed === 'S' ? 0.92 : 0.98
             });
-            register3DObject(cable, lineas3D);
+            register3DObject(bundle.group, lineas3D);
 
             const lengthMeters = dist2D / WORLD_SCALE_3D;
             const label = createLabelSprite(`${redondear(lengthMeters, 1)} m`, {
@@ -5567,7 +5764,7 @@
             label.position.copy(mid);
             register3DObject(label, vanos3D);
             stats.vanos += 1;
-            stats.cables += 1;
+            stats.cables += bundle.count;
           }
         });
       });
@@ -5607,7 +5804,7 @@
       stats.retenidas = retenidas3D.length;
       stats.pat = pat3D.length;
       stats.vanos = vanos3D.length;
-      stats.cables = lineas3D.length;
+      stats.cables = Math.max(stats.cables, lineas3D.reduce((sum, item) => sum + (item.userData?.conductorCount || 1), 0));
 
       update3DStats(stats);
       frameCameraToSystem();
@@ -5682,6 +5879,7 @@
 
     function resize3DRenderer() {
       const container = document.getElementById('view3D');
+      setupJoystick3D();
       if (!camera || !renderer || !container) return;
       const width = Math.max(320, container.clientWidth || window.innerWidth);
       const height = Math.max(240, container.clientHeight || window.innerHeight);
@@ -5780,6 +5978,7 @@
         return;
       }
       requestAnimationFrame(animate3D);
+      updateJoystick3D();
       if (controls) controls.update();
       renderer.render(scene, camera);
     }

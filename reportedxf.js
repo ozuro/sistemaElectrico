@@ -995,6 +995,82 @@
       this.entities.push(entity.join('\n'));
     }
 
+    addPaperLine(layer, x1, y1, x2, y2, color = null) {
+      this.ensureLayer(layer);
+      const entity = [
+        '0', 'LINE',
+        '8', layer,
+        '67', '1',
+        '10', fmt(x1), '20', fmt(y1), '30', '0',
+        '11', fmt(x2), '21', fmt(y2), '31', '0'
+      ];
+      const entityColor = dxfColor(color);
+      if (entityColor !== null) entity.splice(6, 0, '62', String(entityColor));
+      this.entities.push(entity.join('\n'));
+    }
+
+    addPaperRectangle(layer, x1, y1, x2, y2, color = null) {
+      this.addPaperLine(layer, x1, y1, x2, y1, color);
+      this.addPaperLine(layer, x2, y1, x2, y2, color);
+      this.addPaperLine(layer, x2, y2, x1, y2, color);
+      this.addPaperLine(layer, x1, y2, x1, y1, color);
+    }
+
+    addPaperText(layer, x, y, value, height = 2.5, rotation = 0, color = null) {
+      this.ensureLayer(layer);
+      const text = escapeDxfText(value);
+      const entity = [
+        '0', 'TEXT',
+        '8', layer,
+        '67', '1',
+        '10', fmt(x), '20', fmt(y), '30', '0',
+        '40', fmt(height),
+        '1', text,
+        '50', fmt(rotation)
+      ];
+      const entityColor = dxfColor(color);
+      if (entityColor !== null) entity.splice(6, 0, '62', String(entityColor));
+      this.entities.push(entity.join('\n'));
+    }
+
+    addPaperViewport(layer, x, y, width, height, viewCenterX, viewCenterY, viewHeight, color = null) {
+      this.ensureLayer(layer);
+      const entity = [
+        '0', 'VIEWPORT',
+        '8', layer,
+        '67', '1',
+        '10', fmt(x), '20', fmt(y), '30', '0',
+        '40', fmt(width),
+        '41', fmt(height),
+        '68', '1',
+        '69', '1',
+        '12', fmt(viewCenterX),
+        '22', fmt(viewCenterY),
+        '13', '0', '23', '0',
+        '14', '10', '24', '10',
+        '15', '10', '25', '10',
+        '16', '0', '26', '0', '36', '1',
+        '17', '0', '27', '0', '37', '0',
+        '42', '50',
+        '43', '0',
+        '44', '0',
+        '45', fmt(viewHeight),
+        '50', '0',
+        '51', '0',
+        '71', '1',
+        '72', '100',
+        '73', '1',
+        '74', '3',
+        '75', '0',
+        '76', '0',
+        '77', '0',
+        '78', '0'
+      ];
+      const entityColor = dxfColor(color);
+      if (entityColor !== null) entity.splice(6, 0, '62', String(entityColor));
+      this.entities.push(entity.join('\n'));
+    }
+
     addMultilineText(layer, x, y, values, height = 2.2, spacing = 3.1, color = null) {
       values.forEach((line, index) => {
         this.addText(layer, x, y - index * spacing, line, height, 0, color);
@@ -1391,7 +1467,7 @@
     return paths.map((path) => projectPointsFromPath(path, zone)).filter((path) => path.length > 1);
   }
 
-  function createReportModel(code, data) {
+  function createReportModel(code, data, options = {}) {
     const zone = chooseZoneFromData(data);
     const writer = new DxfWriter();
 
@@ -1414,6 +1490,9 @@
     writer.ensureLayer('BASE_CARRETERAS', 9);
     writer.ensureLayer('BASE_CURVAS_NIVEL', 30);
     writer.ensureLayer('BASE_CURVAS_SECUNDARIAS', 8);
+    writer.ensureLayer('REDCAD_PAPER_FRAME', 7);
+    writer.ensureLayer('REDCAD_PAPER_TEXT', 7);
+    writer.ensureLayer('REDCAD_VIEWPORTS', 8);
 
     const subestacion = data.subestacion || [];
     const suministros = data.suministros || [];
@@ -1863,6 +1942,15 @@
     const outerMaxY = Math.max(writer.bounds.maxY, titleY2) + 12;
     writer.addRectangle('BT_FRAME', outerMinX, outerMinY, outerMaxX, outerMaxY, 7);
 
+    if (options.layout !== false) {
+      addRedcadPaperLayout(writer, summary, {
+        minX: networkBounds.minX,
+        minY: networkBounds.minY,
+        maxX: networkBounds.maxX,
+        maxY: networkBounds.maxY
+      });
+    }
+
     return {
       writer,
       summary
@@ -1935,11 +2023,101 @@
     setTimeout(() => URL.revokeObjectURL(url), 500);
   }
 
+  function addRedcadPaperLayout(writer, summary, modelBounds) {
+    const page = { w: 420, h: 297, m: 10 };
+    const titleH = 54;
+    const view = {
+      x1: page.m,
+      y1: page.m + titleH,
+      x2: page.w - page.m,
+      y2: page.h - page.m
+    };
+    const title = {
+      x1: page.m,
+      y1: page.m,
+      x2: page.w - page.m,
+      y2: page.m + titleH
+    };
+    const cx = (modelBounds.minX + modelBounds.maxX) / 2;
+    const cy = (modelBounds.minY + modelBounds.maxY) / 2;
+    const modelW = Math.max(40, modelBounds.maxX - modelBounds.minX);
+    const modelH = Math.max(40, modelBounds.maxY - modelBounds.minY);
+    const viewAspect = (view.x2 - view.x1) / (view.y2 - view.y1);
+    const modelAspect = modelW / modelH;
+    const viewHeight = (modelAspect > viewAspect ? modelW / viewAspect : modelH) * 1.18;
+
+    writer.addPaperRectangle('REDCAD_PAPER_FRAME', 0, 0, page.w, page.h, 8);
+    writer.addPaperRectangle('REDCAD_PAPER_FRAME', page.m, page.m, page.w - page.m, page.h - page.m, 7);
+    writer.addPaperRectangle('REDCAD_PAPER_FRAME', view.x1, view.y1, view.x2, view.y2, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', view.x1 + 4, view.y2 - 7, 'CORTE / VENTANA RED SECUNDARIA BT', 3.0, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', view.x1 + 4, view.y2 - 13, `Modelo georreferenciado en UTM: E ${fmt(cx, 2)} / N ${fmt(cy, 2)}`, 2.0, 0, 8);
+    writer.addPaperText('REDCAD_PAPER_TEXT', view.x1 + 4, view.y2 - 19, 'Nota: hoja segura sin VIEWPORT nativo para evitar cierre/colapso en AutoCAD.', 1.8, 0, 8);
+    writer.addPaperRectangle('REDCAD_PAPER_FRAME', view.x1 + 26, view.y1 + 24, view.x2 - 26, view.y2 - 28, 8);
+    writer.addPaperText('REDCAD_PAPER_TEXT', view.x1 + 34, (view.y1 + view.y2) / 2 + 4, 'LA RED ESTA EN MODEL SPACE CON COORDENADAS UTM REALES', 3.0, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', view.x1 + 34, (view.y1 + view.y2) / 2 - 4, 'Use Zoom Extents en Modelo o referencias del cajetin.', 2.2, 0, 8);
+    writer.addPaperText('REDCAD_PAPER_TEXT', view.x2 - 46, view.y1 + 5, 'N', 4, 0, 7);
+    writer.addPaperLine('REDCAD_PAPER_FRAME', view.x2 - 42, view.y1 + 4, view.x2 - 42, view.y1 + 22, 7);
+    writer.addPaperLine('REDCAD_PAPER_FRAME', view.x2 - 42, view.y1 + 22, view.x2 - 46, view.y1 + 16, 7);
+    writer.addPaperLine('REDCAD_PAPER_FRAME', view.x2 - 42, view.y1 + 22, view.x2 - 38, view.y1 + 16, 7);
+
+    writer.addPaperRectangle('REDCAD_PAPER_FRAME', title.x1, title.y1, title.x2, title.y2, 7);
+    writer.addPaperLine('REDCAD_PAPER_FRAME', title.x1 + 230, title.y1, title.x1 + 230, title.y2, 7);
+    writer.addPaperLine('REDCAD_PAPER_FRAME', title.x1 + 315, title.y1, title.x1 + 315, title.y2, 7);
+    writer.addPaperLine('REDCAD_PAPER_FRAME', title.x1, title.y1 + 31, title.x2, title.y1 + 31, 7);
+    writer.addPaperLine('REDCAD_PAPER_FRAME', title.x1, title.y1 + 16, title.x2, title.y1 + 16, 7);
+
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 5, title.y2 - 9, 'PLANO DE RED SECUNDARIA - BT', 4.2, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 5, title.y2 - 18, `SED: ${summary.code}`, 2.8, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 5, title.y2 - 27, `NOMBRE: ${textSafe(summary.name).substring(0, 48)}`, 2.3, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 5, title.y2 - 39, `UBIGEO: ${summary.ubigeo} | CRS: WGS84 UTM ${summary.utmZone}${summary.hemisphere} EPSG:${summary.epsg}`, 2.1, 0, 8);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 5, title.y2 - 48, `TRAMOS: ${summary.totalLineCount} | POSTES: ${summary.totalPoleCount} | SUMINISTROS: ${summary.totalSupplyCount}`, 2.1, 0, 7);
+
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 236, title.y2 - 9, 'RESUMEN', 3, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 236, title.y2 - 18, `POT: ${fmt(summary.powerKvA, 1)} kVA`, 2.1, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 236, title.y2 - 27, `CAIDA: ${fmt(summary.dropPct, 2)}%`, 2.1, 0, summary.status === 'APTO' ? 3 : 2);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 236, title.y2 - 39, `CABLE: ${fmt(summary.cableKm, 3)} km`, 2.1, 0, 7);
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 236, title.y2 - 48, `RET: ${summary.totalRetenidaCount} | PAT: ${summary.totalPatCount}`, 2.1, 0, 7);
+
+    writer.addPaperText('REDCAD_PAPER_TEXT', title.x1 + 321, title.y2 - 9, 'LEYENDA', 3, 0, 7);
+    paperLegend(writer, title.x1 + 321, title.y2 - 18, 'Transformador', 1);
+    paperLegend(writer, title.x1 + 321, title.y2 - 26, 'Lineas BT', 5);
+    paperLegend(writer, title.x1 + 321, title.y2 - 34, 'Postes', 3);
+    paperLegend(writer, title.x1 + 321, title.y2 - 42, 'Suministros', 4);
+  }
+
+  function paperLegend(writer, x, y, label, color) {
+    writer.addPaperLine('REDCAD_PAPER_FRAME', x, y, x + 10, y, color);
+    writer.addPaperText('REDCAD_PAPER_TEXT', x + 13, y - 1.3, label, 2.0, 0, 7);
+  }
+
   async function generarReporteDXF(codigoSED = '') {
     const code = getSelectedCodigo(codigoSED);
     if (!code) {
       showNotification('Seleccione una subestacion o ingrese un codigo SED para exportar DXF', 'error');
       return;
+    }
+
+    let exportMode = 'layout';
+    if (window.Swal) {
+      const choice = await Swal.fire({
+        title: 'Exportar DXF',
+        html: `
+          <div style="text-align:left">
+            <p><b>SED:</b> ${textSafe(code)}</p>
+            <p>Seleccione el tipo de salida.</p>
+          </div>
+        `,
+        input: 'select',
+        inputOptions: {
+          layout: 'DXF maquetado con layout/corte',
+          georef: 'DXF georreferenciado simple'
+        },
+        inputValue: 'layout',
+        showCancelButton: true,
+        confirmButtonText: 'Exportar'
+      });
+      if (!choice.isConfirmed) return;
+      exportMode = choice.value || 'layout';
     }
 
     showLoadingMessage(`Generando DXF del transformador ${code}...`);
@@ -1950,10 +2128,10 @@
         throw new Error('No se encontro la subestacion seleccionada.');
       }
 
-      const model = createReportModel(code, data);
+      const model = createReportModel(code, data, { layout: exportMode === 'layout' });
       const dxf = model.writer.toString();
       const date = new Date().toISOString().split('T')[0];
-      const fileName = `reporte_dxf_${code}_${date}.dxf`;
+      const fileName = `${exportMode === 'layout' ? 'plano_redsecundaria_layout' : 'reporte_dxf'}_${code}_${date}.dxf`;
       downloadFile(fileName, dxf);
       showNotification(
         `DXF generado: ${code} | ${fmt(model.summary.dropPct, 2)}% de caida estimada`,

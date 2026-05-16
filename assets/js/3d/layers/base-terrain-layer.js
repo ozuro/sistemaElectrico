@@ -51,7 +51,7 @@
     }
 
     const minElevation = Math.min(...samples.map((sample) => sample.elevation));
-    const verticalScale = 0.22 * (Number(options.elevationScale) || 1);
+    const verticalScale = 0.55 * (Number(options.elevationScale) || 1);
 
     return (x, z) => {
       const nearest = samples
@@ -60,24 +60,24 @@
           return { sample, distance };
         })
         .sort((a, b) => a.distance - b.distance)
-        .slice(0, 6);
+        .slice(0, 12);
 
       if (!nearest.length) return 0;
 
       let weighted = 0;
       let totalWeight = 0;
       nearest.forEach(({ sample, distance }) => {
-        const weight = 1 / Math.max(8, distance);
+        const weight = 1 / Math.max(18, distance * distance * 0.018);
         weighted += sample.elevation * weight;
         totalWeight += weight;
       });
 
       const relative = (weighted / totalWeight) - minElevation;
-      return clamp(relative * verticalScale, -42, 42);
+      return clamp(relative * verticalScale, -120, 120);
     };
   }
 
-  function expandBounds(bounds, minSize = 180, padding = 90) {
+  function expandBounds(bounds, minSize = 420, padding = 180) {
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerZ = (bounds.minZ + bounds.maxZ) / 2;
     const width = Math.max(minSize, bounds.maxX - bounds.minX + padding * 2);
@@ -94,6 +94,30 @@
     };
   }
 
+  function smoothTerrainGeometry(geometry, iterations = 2) {
+    const position = geometry.attributes.position;
+    const grid = Math.round(Math.sqrt(position.count));
+    if (grid * grid !== position.count) return;
+    for (let pass = 0; pass < iterations; pass += 1) {
+      const ys = [];
+      for (let i = 0; i < position.count; i += 1) ys.push(position.getY(i));
+      for (let z = 1; z < grid - 1; z += 1) {
+        for (let x = 1; x < grid - 1; x += 1) {
+          const idx = z * grid + x;
+          const avg = (
+            ys[idx] * 4 +
+            ys[idx - 1] +
+            ys[idx + 1] +
+            ys[idx - grid] +
+            ys[idx + grid]
+          ) / 8;
+          position.setY(idx, avg);
+        }
+      }
+    }
+    position.needsUpdate = true;
+  }
+
   function buildImageryUrl(bounds, localToLatLng) {
     const corners = [
       localToLatLng(bounds.minX, bounds.minZ),
@@ -108,6 +132,7 @@
       bboxSR: '4326',
       imageSR: '4326',
       size: '1024,1024',
+      dpi: '160',
       format: 'jpg',
       transparent: 'false',
       f: 'image'
@@ -131,7 +156,7 @@
   }
 
   function createTerrainMesh(THREE, bounds, sampler, options, localToLatLng) {
-    const geometry = new THREE.PlaneGeometry(bounds.width, bounds.depth, 64, 64);
+    const geometry = new THREE.PlaneGeometry(bounds.width, bounds.depth, 128, 128);
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(bounds.centerX, 0, bounds.centerZ);
 
@@ -142,11 +167,12 @@
       positions.setY(i, sampler(x, z));
     }
     positions.needsUpdate = true;
+    smoothTerrainGeometry(geometry, 3);
     geometry.computeVertexNormals();
 
     const material = new THREE.MeshStandardMaterial({
-      color: options.satelliteEnabled ? 0xb6c8a3 : 0x9dbb87,
-      roughness: 1,
+      color: options.satelliteEnabled ? 0xb6c8a3 : 0x5fae4f,
+      roughness: 0.88,
       metalness: 0,
       side: THREE.DoubleSide
     });
@@ -256,12 +282,15 @@
       updateVisibility(nextOptions = {}) {
         roadGroup.visible = Boolean(nextOptions.roadsEnabled);
         contourGroup.visible = Boolean(nextOptions.reliefEnabled);
-        if (nextOptions.satelliteEnabled) {
-          loadImageryTexture(THREE, terrainMesh, expanded, localToLatLng);
-        } else if (terrainMesh.material.map) {
-          terrainMesh.material.map.dispose();
-          terrainMesh.material.map = null;
-          terrainMesh.material.color.setHex(0x9dbb87);
+      if (nextOptions.satelliteEnabled) {
+        loadImageryTexture(THREE, terrainMesh, expanded, localToLatLng);
+      } else if (terrainMesh.material.map) {
+        terrainMesh.material.map.dispose();
+        terrainMesh.material.map = null;
+          terrainMesh.material.color.setHex(0x5fae4f);
+          terrainMesh.material.needsUpdate = true;
+        } else {
+          terrainMesh.material.color.setHex(0x5fae4f);
           terrainMesh.material.needsUpdate = true;
         }
       },
