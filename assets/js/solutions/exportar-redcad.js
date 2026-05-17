@@ -628,18 +628,26 @@
 
   function classifyPlacemark(name, description) {
     const raw = normalizeText(`${name} ${description}`);
-    if (raw.includes('subestacion')) return 'subestacion';
-    if (/^poste\s+n(bt|mt)?[0-9]/i.test(text(name))) return 'poste';
+    const cleanName = text(name);
+    if (
+      raw.includes('subestacion') ||
+      raw.includes('sed proyectada') ||
+      /^hija_sed/i.test(cleanName) ||
+      /^sedp_/i.test(cleanName)
+    ) return 'subestacion';
+    if (/^poste\s+n(bt|mt)?[0-9]/i.test(cleanName) || /^pbt[_-]/i.test(cleanName)) return 'poste';
     if (
       (raw.includes('tramo bt') && raw.includes('aereo')) ||
-      (/^tbt[0-9]/i.test(text(name)) && raw.includes('cable') && raw.includes('aereo')) ||
-      (/^tbt[0-9]/i.test(text(name)) && raw.includes('tipo red') && raw.includes('aereo'))
+      raw.includes('red bt proyectada') ||
+      /^btref[_-]/i.test(cleanName) ||
+      (/^tbt[0-9]/i.test(cleanName) && raw.includes('cable') && raw.includes('aereo')) ||
+      (/^tbt[0-9]/i.test(cleanName) && raw.includes('tipo red') && raw.includes('aereo'))
     ) return 'tramo_bt';
     if (
       (raw.includes('linea mt') && raw.includes('aereo')) ||
-      (/^tmt[0-9]/i.test(text(name)) && raw.includes('aereo'))
+      (/^tmt[0-9]/i.test(cleanName) && raw.includes('aereo'))
     ) return 'linea_mt';
-    if (raw.includes('suministro')) return 'suministro';
+    if (raw.includes('suministro') || raw.includes('acometida') || /^aco[_-]/i.test(cleanName)) return 'suministro';
     return 'otro';
   }
 
@@ -721,6 +729,43 @@
     return text(getElements(pm, 'description')[0]?.textContent || '');
   }
 
+  function closestPlacemark(node) {
+    let current = node;
+    while (current) {
+      if (current.nodeType === 1 && /Placemark$/i.test(current.nodeName || '')) return current;
+      current = current.parentNode;
+    }
+    return null;
+  }
+
+  function harvestLineStringsFallback(documentXml, result, seenBtSegments) {
+    getElements(documentXml, 'LineString').forEach((lineString, index) => {
+      const pm = closestPlacemark(lineString);
+      const name = pm ? placemarkName(pm) : `Tramo BT Fallback ${index + 1}`;
+      const description = pm ? placemarkDescription(pm) : '';
+      const raw = normalizeText(`${name} ${description}`);
+      const path = parseCoordinateText(getElements(lineString, 'coordinates')[0]?.textContent || '');
+      if (path.length < 2) return;
+
+      if (raw.includes('suministro') || raw.includes('acometida') || /^aco[_-]/i.test(text(name))) {
+        if (!result.suministros.some(item => item.name === name)) {
+          result.suministros.push({ name, description, latlng: path[path.length - 1], index });
+        }
+        return;
+      }
+
+      const key = segmentKey(path);
+      if (key && seenBtSegments.has(key)) return;
+      if (key) seenBtSegments.add(key);
+      result.tramosBT.push({
+        name,
+        description: description || 'Tramo BT Aéreo',
+        path: path.length > 1 ? [path[0], path[path.length - 1]] : path,
+        index
+      });
+    });
+  }
+
   function parseKmlPlacemarks(kmlText) {
     const documentXml = new DOMParser().parseFromString(kmlText, 'application/xml');
     const parserError = documentXml.getElementsByTagName('parsererror')[0];
@@ -739,17 +784,22 @@
     getElements(documentXml, 'Placemark').forEach((pm, index) => {
       const name = placemarkName(pm);
       const description = placemarkDescription(pm);
+      const rawPlacemarkText = normalizeText(`${name} ${description}`);
       const type = classifyPlacemark(name, description);
       const coordinateNodes = getElements(pm, 'coordinates');
       let paths = coordinateNodes
         .map(node => parseCoordinateText(node.textContent || ''))
         .filter(path => path.length > 0);
+      const hasLineString = getElements(pm, 'LineString').length > 0 || paths.some(path => path.length > 1);
       if (type === 'tramo_bt' && isGeneratedCablePlacemark(name, description)) {
         paths = paths
           .map(path => path.length > 1 ? [path[0], path[path.length - 1]] : path)
           .filter(path => path.length > 1);
       } else if (type === 'tramo_bt') {
         paths = paths.map(path => simplifyPath(path, 0)).filter(path => path.length > 1);
+        if (/^tramo\s+bt/i.test(text(name)) || /^btref[_-]/i.test(text(name))) {
+          paths = paths.map(path => path.length > 1 ? [path[0], path[path.length - 1]] : path);
+        }
       }
       const firstPoint = paths.find(path => path.length)?.[0] || null;
 
@@ -772,11 +822,32 @@
           result.lineasMT.push({ name, description, path, index });
         });
       } else if (type === 'suministro' && firstPoint) {
-        result.suministros.push({ name, description, latlng: firstPoint, index });
+        const supplyPath = paths.find(path => path.length) || [firstPoint];
+        const isAcometidaLine = /^aco[_-]/i.test(text(name)) && supplyPath.length > 1;
+        result.suministros.push({
+          name,
+          description,
+          latlng: isAcometidaLine ? supplyPath[supplyPath.length - 1] : firstPoint,
+          index
+        });
+      } else if (
+        type === 'otro' &&
+        hasLineString &&
+        paths.some(path => path.length > 1) &&
+        !rawPlacemarkText.includes('acometida') &&
+        !rawPlacemarkText.includes('suministro')
+      ) {
+        paths.filter(path => path.length > 1).forEach(path => {
+          const key = segmentKey(path);
+          if (key && seenBtSegments.has(key)) return;
+          if (key) seenBtSegments.add(key);
+          result.tramosBT.push({ name, description: description || 'Tramo BT Aéreo', path, index });
+        });
       }
     });
 
-    if (!result.subestacion) throw new Error('No se encontró Placemark con descripción Subestacion.');
+    if (!result.subestacion) throw new Error('No se encontró Placemark de Subestación/SED proyectada.');
+    if (!result.tramosBT.length) harvestLineStringsFallback(documentXml, result, seenBtSegments);
     if (!result.tramosBT.length) throw new Error('No se encontraron Placemarks con descripción Tramo BT Aéreo.');
     return result;
   }

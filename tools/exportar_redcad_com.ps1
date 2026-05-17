@@ -59,7 +59,11 @@ function Set-CellInteger($sheet, $row, $col, $value) {
 function Read-RedcadJson($path) {
   $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
   if (-not $data.estructuras) { throw 'El JSON no contiene estructuras.' }
-  if (-not $data.acometidas) { $data | Add-Member -NotePropertyName acometidas -NotePropertyValue @() }
+  if (-not ($data.PSObject.Properties.Name -contains 'acometidas')) {
+    $data | Add-Member -NotePropertyName acometidas -NotePropertyValue @()
+  } elseif ($null -eq $data.acometidas) {
+    $data.acometidas = @()
+  }
   return $data
 }
 

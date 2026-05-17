@@ -56,3 +56,33 @@ carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se pu
 [2026-05-14T01:49:20.598Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
 [2026-05-14T02:38:59.793Z] Generador local RedCAD listo en http://127.0.0.1:8765
 [2026-05-14T02:38:59.800Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-17T02:05:41.701Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-17T02:05:41.707Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.
+[2026-05-17T02:11:29.969Z] PowerShell error 1: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede agregar un miembro con el nombre 
+"acometidas" porque ya existe uno. Para sobrescribir el miembro de todas formas, agregue el par�metro Force al 
+comando. | Linea 62:   if (-not $data.acometidas) { $data | Add-Member -NotePropertyName acometidas -NotePropertyValue 
+@() }
+En C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1: 11 Car�cter: 3
++   Write-Error ("{0} | Linea {1}: {2}" -f $_.Exception.Message, $_.Inv ...
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,exportar_redcad_com.ps1
+[2026-05-17T02:11:29.970Z] Export error: Error: C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1 : No se puede agregar un miembro con el nombre 
+"acometidas" porque ya existe uno. Para sobrescribir el miembro de todas formas, agregue el par�metro Force al 
+comando. | Linea 62:   if (-not $data.acometidas) { $data | Add-Member -NotePropertyName acometidas -NotePropertyValue 
+@() }
+En C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva 
+carpeta\sistema_redes_existentes_carbao\tools\exportar_redcad_com.ps1: 11 Car�cter: 3
++   Write-Error ("{0} | Linea {1}: {2}" -f $_.Exception.Message, $_.Inv ...
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,exportar_redcad_com.ps1
+    at ChildProcess.<anonymous> (C:\Users\ALVARO PL\Desktop\electro-carbao\argis\Nueva carpeta\sistema_redes_existentes_carbao\tools\redcad_local_server.js:64:16)
+    at ChildProcess.emit (node:events:519:28)
+    at maybeClose (node:internal/child_process:1105:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5)
+[2026-05-17T02:33:25.577Z] Generador local RedCAD listo en http://127.0.0.1:8765
+[2026-05-17T02:33:25.583Z] Mantenga esta ventana abierta mientras usa Generar XLS RedCAD.

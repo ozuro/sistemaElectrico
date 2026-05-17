@@ -41,12 +41,15 @@
     tempLpStart: null,
     tempLpKind: 'LP',
     tempLpSpan: 140,
+    tempLpPhaseMode: 'TRIFASICO',
+    tempLpConductor: { name: 'AAAC 35 mm2', source: 'por defecto LP' },
     tempBtPoints: []
   };
 
   let projectedLayer = null;
   let traceToolbar = null;
   injectProjectedStyles();
+  restoreGlobalCatalogs();
 
   function ensureLayer() {
     if (projectedLayer) return projectedLayer;
@@ -468,9 +471,10 @@
     });
     if (!result.isConfirmed) return;
     state.catalogs = result.value;
+    saveGlobalCatalogs();
     saveProject();
     const names = [state.catalogs.configuracion?.name, state.catalogs.suministros?.name].filter(Boolean).join(' + ');
-    notify(names ? `Catalogos registrados: ${names}` : 'No se cargo ningun catalogo.', names ? 'success' : 'info', 7000);
+    notify(names ? `Catalogos registrados y guardados: ${names}` : 'No se cargo ningun catalogo.', names ? 'success' : 'info', 7000);
   }
 
   async function readWorkbookInfo(file) {
@@ -491,6 +495,7 @@
       sheets: workbook.SheetNames,
       substationTypes: extractSubstationTypes(textValues),
       conductors: extractConductors(textValues),
+      poleTypes: extractPoleTypes(textValues),
       sampleRows: sheetRows,
       loadedAt: new Date().toISOString()
     };
@@ -576,6 +581,29 @@
     return Array.from(found).slice(0, 200);
   }
 
+  function extractPoleTypes(values) {
+    const found = new Set();
+    values.forEach((value) => {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      if (!text || text.length > 90) return;
+      if (/(poste|cac|c\.a\.c|concreto|madera|metal|13\/400|13-400|12\/300|15\/500)/i.test(text)) {
+        found.add(text);
+      }
+    });
+    return Array.from(found).slice(0, 120).concat(found.size ? [] : defaultPoleTypes());
+  }
+
+  function defaultPoleTypes() {
+    return [
+      'Poste CAC 13/400',
+      'Poste CAC 13/300',
+      'Poste CAC 12/300',
+      'Poste CAC 15/500',
+      'Poste de madera 12 m',
+      'Poste metalico 13 m'
+    ];
+  }
+
   async function askLpReference() {
     const result = await modal({
       title: 'LP/RP de referencia',
@@ -615,21 +643,9 @@
   }
 
   async function startManualLpReference() {
-    const result = await modal({
-      title: 'Tipo de trazo',
-      html: '<div class="pg-card" style="text-align:left">Indique si la referencia que trazara es LP o RP.</div>',
-      input: 'select',
-      inputOptions: {
-        LP: 'LP - Linea primaria',
-        RP: 'RP - Red primaria'
-      },
-      inputValue: state.tempLpKind || 'LP',
-      showCancelButton: true,
-      confirmButtonText: 'Iniciar trazo'
-    });
-    if (!result.isConfirmed) return;
-    state.tempLpKind = result.value || 'LP';
-    state.tempLpSpan = state.tempLpKind === 'RP' ? 140 : 140;
+    const config = await askLpRpTechnicalConfig(state.tempLpKind || 'LP');
+    if (!config) return;
+    applyTempLpRpConfig(config);
     state.mode = 'draw-lp-reference';
     state.tempBtPoints = [];
     showTraceToolbar(`${state.tempLpKind}: click agrega punto, arrastre puntos para corregir`, {
@@ -639,6 +655,70 @@
     });
     notify(`Trace ${state.tempLpKind}: haga clicks, arrastre puntos si se equivoca, y use Guardar/Cancelar.`, 'info', 12000);
     map.on('click', onLpReferenceClick);
+  }
+
+  async function askLpRpTechnicalConfig(defaultKind = 'LP') {
+    const conductorOptions = conductorOptionsForLpRp();
+    const conductorHtml = conductorOptions.map((item, index) => (
+      `<option value="${index}" ${index === 0 ? 'selected' : ''}>${escapeHtml(item.name)}</option>`
+    )).join('');
+    const result = await modal({
+      title: 'Datos del trazo LP/RP',
+      html: `
+        <div style="text-align:left">
+          <div class="pg-card">Defina el tipo y datos preliminares. Si falta catalogo RedCAD, se usa LP trifasica AAAC 35 como referencia.</div>
+          <label>Tipo de red</label>
+          <select id="pgLpKind" class="swal2-select">
+            <option value="LP" ${defaultKind === 'LP' ? 'selected' : ''}>LP - Linea primaria</option>
+            <option value="RP" ${defaultKind === 'RP' ? 'selected' : ''}>RP - Red primaria</option>
+          </select>
+          <label>Sistema</label>
+          <select id="pgLpPhase" class="swal2-select">
+            <option value="TRIFASICO" selected>Trifasico</option>
+            <option value="BIFASICO">Bifasico</option>
+            <option value="MONOFASICO">Monofasico</option>
+          </select>
+          <label>Conductor</label>
+          <select id="pgLpConductor" class="swal2-select">${conductorHtml}</select>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Iniciar trazo',
+      preConfirm: () => {
+        const conductor = conductorOptions[Number(document.getElementById('pgLpConductor')?.value || 0)] || conductorOptions[0];
+        return {
+          kind: document.getElementById('pgLpKind')?.value || 'LP',
+          phaseMode: document.getElementById('pgLpPhase')?.value || 'TRIFASICO',
+          conductor
+        };
+      }
+    });
+    return result.isConfirmed ? result.value : null;
+  }
+
+  function conductorOptionsForLpRp() {
+    const catalog = (state.catalogs.configuracion?.conductors || [])
+      .filter((name) => /AAAC|ALUMIN|35|50|70|mm/i.test(name))
+      .map((name) => ({ name, source: state.catalogs.configuracion?.name || 'Configuracion.xls' }));
+    const defaults = [
+      { name: 'AAAC 35 mm2', source: 'por defecto LP' },
+      { name: 'AAAC 50 mm2', source: 'por defecto LP/RP' },
+      { name: 'AAAC 70 mm2', source: 'por defecto LP/RP' }
+    ];
+    const seen = new Set();
+    return [...defaults, ...catalog].filter((item) => {
+      const key = String(item.name).toUpperCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 80);
+  }
+
+  function applyTempLpRpConfig(config) {
+    state.tempLpKind = config.kind || 'LP';
+    state.tempLpSpan = 140;
+    state.tempLpPhaseMode = config.phaseMode || 'TRIFASICO';
+    state.tempLpConductor = config.conductor || { name: 'AAAC 35 mm2', source: 'por defecto LP' };
   }
 
   function onLpReferenceClick(event) {
@@ -757,6 +837,8 @@
         <div class="pg-card" style="text-align:left">
           <p>Los puntos que marcaste seran <b>nodos fijos</b> del trazo.</p>
           <p>Si entre dos nodos hay mucha distancia, el programa insertara postes intermedios segun la distancia promedio.</p>
+          <p><b>Sistema:</b> ${escapeHtml(state.tempLpPhaseMode || 'TRIFASICO')}</p>
+          <p><b>Conductor:</b> ${escapeHtml(state.tempLpConductor?.name || 'AAAC 35 mm2')}</p>
         </div>
         <input id="pgLpSpan" class="swal2-input" type="number" min="30" value="${state.tempLpSpan || 140}" placeholder="Distancia promedio entre postes (m)">
       `,
@@ -773,11 +855,16 @@
       fixed: true,
       role: 'nodo_fijo'
     }));
-    const network = buildLpNetworkFromNodes(fixedNodes, result.value.span, kind);
+    const network = buildLpNetworkFromNodes(fixedNodes, result.value.span, kind, {
+      phaseMode: state.tempLpPhaseMode || 'TRIFASICO',
+      conductor: state.tempLpConductor || { name: 'AAAC 35 mm2', source: 'por defecto LP' }
+    });
     state.lpReferences.push({
       id: network.id,
       source: 'trazo_manual',
       kind,
+      phaseMode: network.phaseMode,
+      conductor: network.conductor,
       spanMeters: result.value.span,
       points: fixedNodes,
       type: 'lp_reference'
@@ -971,6 +1058,28 @@
     state.selectedClientIds = new Set(assigned.map((client) => client.id));
     renderProjected();
     notify('Modo exclusion: haga click en los clientes verdes para quitarlos de esta SED.', 'info', 12000);
+  }
+
+  async function unassignAllClientsFromChild(child) {
+    const assigned = assignedClients(child.id);
+    if (!assigned.length) {
+      notify('Esta SED hija no tiene clientes asignados.', 'info', 6000);
+      return;
+    }
+    const result = await modal({
+      title: 'Desagregar clientes',
+      html: `<div class="pg-card" style="text-align:left">Se quitaran <b>${assigned.length}</b> clientes de la SED <b>${escapeHtml(child.name)}</b> y se borraran sus acometidas proyectadas.</div>`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Desagregar todo',
+      cancelButtonText: 'Cancelar'
+    });
+    if (!result.isConfirmed) return;
+    assigned.forEach((client) => { delete state.assignments[client.id]; });
+    state.design.serviceDrops = (state.design.serviceDrops || []).filter((drop) => drop.childSedId !== child.id);
+    saveProject();
+    renderProjected();
+    notify('Clientes desagregados de esta SED.', 'success', 7000);
   }
 
   function assignNearestClients(child) {
@@ -1208,11 +1317,19 @@
         .filter((route) => route.childSedId === sed.id)
         .flatMap((route) => validPointList(route.points).slice(1));
       const candidatePoles = btRoutePoles.length ? btRoutePoles : (state.design.poles || []).filter((pole) => pole.childSedId === sed.id);
+      if (!candidatePoles.length) {
+        if (options.collectWarnings && assignedClients(sed.id).length && state.design.warnings) {
+          state.design.warnings.push(`SED ${sed.name}: clientes asignados sin postes BT; no se generan acometidas hasta trazar BT.`);
+        }
+        return;
+      }
       assignedClients(sed.id).forEach((client) => {
         const manual = previous.get(client.id);
-        const source = manual?.manualSource || nearestPoint(client, candidatePoles) || sed;
+        const source = manual?.manualSource || nearestPoint(client, candidatePoles);
+        if (!source) return;
         const length = manual?.manualLength || distance(source, client);
         const overLimit = length > dropMax;
+        const dropClass = overLimit ? 'larga_fuera_norma' : length >= 15 ? 'media_larga' : 'corta';
         state.design.serviceDrops.push({
           id: `ACO_${client.id}`,
           childSedId: sed.id,
@@ -1222,6 +1339,7 @@
           length,
           dropMax,
           overLimit,
+          dropClass,
           manualLength: manual?.manualLength || null,
           manualSource: manual?.manualSource || null
         });
@@ -1307,8 +1425,17 @@
           });
         });
       });
-      // La conexion LP/RP se guarda como relacion tecnica y pone la SED en verde.
-      // No se dibuja una linea extra para evitar duplicar visualmente la LP/RP existente.
+      state.lpConnections.forEach((connection) => {
+        const color = connection.type === 'lp_rp_energy' ? '#22c55e' : '#16a34a';
+        const label = connection.type === 'lp_rp_energy'
+          ? `Energia ${connection.networkKind || 'LP/RP'} -> SED`
+          : 'Llegada LP/RP a SED';
+        const conductor = addPolyline(connection.points, color, 4, label, draft, connection.type === 'lp_rp_energy' ? '' : '6 5');
+        if (conductor) {
+          conductor.setStyle?.({ opacity: 0.95 });
+          conductor.bindTooltip(`${label}${connection.conductor?.name ? ` | ${connection.conductor.name}` : ''}`);
+        }
+      });
       state.btRoutes.forEach((line) => {
         const polyline = addPolyline(line.points, '#2563eb', 3, 'Referencia BT', draft, '6 5');
         if (polyline) polyline.on('click', () => openBtRouteActions(line.id));
@@ -1317,12 +1444,14 @@
       renderBtReferencePoles(draft);
       renderTempBtPoles(draft);
       state.design.serviceDrops.forEach((line) => {
-        const color = line.overLimit ? '#dc2626' : '#9333ea';
-        const polyline = addPolyline(line.points, color, line.overLimit ? 3 : 2, `Acometida ${Math.round(line.length || 0)} m`, draft, '3 5');
+        const color = line.overLimit ? '#dc2626' : line.dropClass === 'media_larga' ? '#f59e0b' : '#16a34a';
+        const dash = line.overLimit ? '3 5' : line.dropClass === 'media_larga' ? '8 5' : '2 6';
+        const polyline = addPolyline(line.points, color, line.overLimit ? 3 : 2, `Acometida ${Math.round(line.length || 0)} m`, draft, dash);
         if (polyline) {
           polyline.on('click', () => openServiceDropActions(line.id));
-          polyline.bindTooltip(`Acometida ${Math.round(line.length || 0)} m${line.overLimit ? ' - supera 25 m' : ''}`);
+          polyline.bindTooltip(`Acometida ${Math.round(line.length || 0)} m${line.overLimit ? ' - supera 25 m' : line.dropClass === 'media_larga' ? ' - 15 a 25 m' : ' - corta'}`);
         }
+        renderServiceDropSymbol(draft, line, color);
       });
 
       state.design.pat.forEach((pat) => {
@@ -1346,18 +1475,71 @@
 
   function renderChildSubstations(layer) {
     state.childSeds.forEach((sed) => {
+      const energized = sed.connected || sed.energized;
       const marker = L.circleMarker([sed.lat, sed.lon], {
-        radius: 12,
-        color: sed.connected ? '#065f46' : '#dc2626',
-        fillColor: sed.connected ? '#22c55e' : '#f97316',
+        radius: energized ? 14 : 12,
+        color: energized ? '#16a34a' : '#dc2626',
+        fillColor: energized ? '#86efac' : '#f97316',
         fillOpacity: 0.95,
-        weight: 4,
+        weight: energized ? 5 : 4,
         pane: 'markerPane'
-      }).bindPopup(`<b>${escapeHtml(sed.name)}</b><br>Padre: ${escapeHtml(sed.parentId)}<br>${sed.connected ? 'Conectada LP/RP' : 'Sin llegada LP/RP'}<br><small>Click: opciones de esta SED hija</small>`);
+      }).bindPopup(`<b>${escapeHtml(sed.name)}</b><br>Padre: ${escapeHtml(sed.parentId)}<br>${energized ? 'ENERGIZADA desde LP/RP' : 'Sin llegada LP/RP'}<br>Poste: ${escapeHtml(sed.substationPoleType || 'Poste CAC 13/400')}<br><small>Click: opciones de esta SED hija</small>`);
       marker.on('click', () => openChildSedActions(sed.id));
       marker.addTo(layer);
       marker.bringToFront?.();
+      if (energized) {
+        L.circle([sed.lat, sed.lon], {
+          radius: 18,
+          color: '#22c55e',
+          fillColor: '#bbf7d0',
+          fillOpacity: 0.15,
+          weight: 2,
+          pane: 'overlayPane'
+        }).addTo(layer);
+      }
     });
+  }
+
+  function renderServiceDropSymbol(layer, drop, color) {
+    const points = validPointList(drop.points);
+    if (points.length < 2) return;
+    const mid = interpolatePoint(points[0], points[1], 0.5);
+    if (drop.dropClass === 'media_larga') {
+      L.circleMarker([mid.lat, mid.lon], {
+        radius: 4,
+        color,
+        fillColor: '#fef3c7',
+        fillOpacity: 1,
+        weight: 2
+      }).bindTooltip(`Nodo acometida ${Math.round(drop.length || 0)} m`).addTo(layer);
+      return;
+    }
+    const arrow = interpolatePoint(points[0], points[1], 0.72);
+    const angle = bearingDegrees(points[0], points[1]);
+    L.marker([arrow.lat, arrow.lon], {
+      interactive: false,
+      icon: L.divIcon({
+        className: 'pg-service-arrow',
+        html: `<div style="width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:9px solid ${color};transform:rotate(${angle}deg);transform-origin:center"></div>`,
+        iconSize: [12, 12],
+        iconAnchor: [6, 6]
+      })
+    }).addTo(layer);
+  }
+
+  function interpolatePoint(a, b, t) {
+    return {
+      lat: Number(a.lat) + (Number(b.lat) - Number(a.lat)) * t,
+      lon: Number(a.lon) + (Number(b.lon) - Number(a.lon)) * t,
+      x: Number.isFinite(Number(a.x)) && Number.isFinite(Number(b.x)) ? Number(a.x) + (Number(b.x) - Number(a.x)) * t : undefined,
+      y: Number.isFinite(Number(a.y)) && Number.isFinite(Number(b.y)) ? Number(a.y) + (Number(b.y) - Number(a.y)) * t : undefined
+    };
+  }
+
+  function bearingDegrees(a, b) {
+    const dy = Number(b.lat) - Number(a.lat);
+    const dx = Number(b.lon) - Number(a.lon);
+    return Math.atan2(dy, dx) * 180 / Math.PI;
   }
 
   function renderBtReferencePoles(layer) {
@@ -1448,7 +1630,10 @@
     const structures = [];
     const networks = [];
 
-    state.lpNetworks.forEach((network) => networks.push({ network: network.kind || 'LP', points: validPointList(network.route) }));
+    state.lpNetworks.forEach((network) => {
+      decorateLpRpNetwork(network);
+      networks.push({ network: network.kind || 'LP', points: validPointList(network.route) });
+    });
     state.btRoutes.forEach((line) => networks.push({ network: 'BT', points: validPointList(line.points) }));
 
     networks.forEach((line) => {
@@ -1468,7 +1653,12 @@
           network: line.network,
           point,
           armado: point.manualArmado || point.armado || (line.network === 'BT' && isBtDerivationPoint(point) ? 'DERIVACION' : classifyArmado(prev, point, next)),
-          mecanico: point.manualMecanico || point.mecanico || (line.network === 'BT' && isBtDerivationPoint(point) ? 'RETENIDA DERIVACION' : classifyMechanical(prev, point, next))
+          mecanico: point.manualMecanico || point.mecanico || (line.network === 'BT' && isBtDerivationPoint(point) ? 'RETENIDA DERIVACION' : classifyMechanical(prev, point, next)),
+          conductor: point.conductor || null,
+          phaseMode: point.phaseMode || '',
+          poleType: point.poleType || '',
+          pat: point.pat || '',
+          retenida: point.retenida || ''
         });
       });
     });
@@ -1743,6 +1933,7 @@
           <p><b>Distancia promedio a clientes:</b> ${stats.avgDistance} m</p>
           <p><b>Capacidad referencial:</b> ${child.capacityKva || 0} kVA</p>
           <p><b>Tipo subestacion:</b> ${escapeHtml(child.substationType || 'No definido')}</p>
+          <p><b>Poste subestacion:</b> ${escapeHtml(child.substationPoleType || 'Poste CAC 13/400')}</p>
           <p><b>Sistema BT asumido:</b> ${escapeHtml(child.phaseMode || 'No definido')}</p>
           <p><b>Conductor asumido:</b> ${escapeHtml(child.conductor?.name || 'No definido')}</p>
         </div>
@@ -1750,9 +1941,11 @@
       input: 'select',
       inputOptions: {
         type: 'Tipo de subestacion / sistema BT',
+        poleType: 'Cambiar poste de subestacion',
         disconnect: 'Eliminar llegada LP/RP de esta SED',
         clients: 'Agrupar/seleccionar clientes',
         exclude: 'Excluir clientes de esta SED',
+        unassignAll: 'Desagregar todos los clientes',
         bt: 'Trazar BT',
         calc: 'Calculos mecanicos y acometidas',
         kmz: 'Exportar proyectado KMZ/KML',
@@ -1765,9 +1958,11 @@
     if (!result.isConfirmed || !result.value) return;
     state.selectedChildId = child.id;
     if (result.value === 'type') return chooseSubstationType(child);
+    if (result.value === 'poleType') return chooseSubstationPoleType(child);
     if (result.value === 'disconnect') return deleteChildLpRpConnection(child);
     if (result.value === 'clients') return chooseChildForClientsFixed(child);
     if (result.value === 'exclude') return excludeClientsFromChild(child);
+    if (result.value === 'unassignAll') return unassignAllClientsFromChild(child);
     if (result.value === 'bt') return chooseChildForBtFixed(child);
     if (result.value === 'calc') return askCalculationRules();
     if (result.value === 'kmz') return exportKmz();
@@ -1822,6 +2017,45 @@
     notify(`Tipo aplicado: ${substationType}. Red BT asumida como ${phaseMode}.`, 'success', 8000);
   }
 
+  async function chooseSubstationPoleType(child) {
+    if (!state.catalogs.configuracion?.poleTypes?.length) {
+      const load = await modal({
+        title: 'Poste de subestacion',
+        html: '<div class="pg-card" style="text-align:left">Para tomar postes desde RedCAD cargue Configuracion.xls. Tambien puede usar opciones referenciales.</div>',
+        showDenyButton: true,
+        showCancelButton: true,
+        confirmButtonText: 'Cargar catalogos',
+        denyButtonText: 'Usar referencial'
+      });
+      if (load.isConfirmed) await askOptionalCatalogs();
+      if (!load.isDenied && !state.catalogs.configuracion?.poleTypes?.length) return;
+    }
+    const poleTypes = state.catalogs.configuracion?.poleTypes?.length
+      ? state.catalogs.configuracion.poleTypes
+      : defaultPoleTypes();
+    const options = {};
+    poleTypes.forEach((type, index) => { options[String(index)] = type; });
+    const result = await modal({
+      title: 'Poste de subestacion proyectada',
+      html: `
+        <div style="text-align:left">
+          <p><b>SED hija:</b> ${escapeHtml(child.name)}</p>
+          <p style="font-size:12px;color:#64748b">La subestacion se considera montada sobre poste. Por defecto se usa Poste CAC 13/400.</p>
+        </div>
+      `,
+      input: 'select',
+      inputOptions: options,
+      inputValue: Math.max(0, poleTypes.indexOf(child.substationPoleType || 'Poste CAC 13/400')).toString(),
+      showCancelButton: true,
+      confirmButtonText: 'Aplicar poste'
+    });
+    if (!result.isConfirmed) return;
+    child.substationPoleType = poleTypes[Number(result.value)] || 'Poste CAC 13/400';
+    saveProject();
+    renderProjected();
+    notify(`Poste de subestacion aplicado: ${child.substationPoleType}.`, 'success', 7000);
+  }
+
   async function openProjectedPointActions(point, context = {}) {
     if (!isValidPoint(point)) return;
     const result = await modal({
@@ -1832,12 +2066,18 @@
           <p><b>Tipo:</b> ${escapeHtml(context.network || 'N/A')}</p>
           <p><b>Armado:</b> ${escapeHtml(displayArmadoName(point, context))}</p>
           <p><b>Mecanico:</b> ${escapeHtml(point.manualMecanico || point.mecanico || 'Preliminar')}</p>
+          ${context.network !== 'BT' ? `<p><b>Sistema:</b> ${escapeHtml(point.phaseMode || 'TRIFASICO')}</p>` : ''}
+          ${context.network !== 'BT' ? `<p><b>Conductor:</b> ${escapeHtml(point.conductor?.name || 'AAAC 35 mm2')}</p>` : ''}
+          ${context.network !== 'BT' ? `<p><b>Poste:</b> ${escapeHtml(point.poleType || 'Preliminar')}</p>` : ''}
+          ${context.network !== 'BT' ? `<p><b>PAT:</b> ${escapeHtml(point.pat || 'Segun norma/catalogo')}</p>` : ''}
+          ${context.network !== 'BT' ? `<p><b>Retenida:</b> ${escapeHtml(point.retenida || 'Segun esfuerzo')}</p>` : ''}
           <p><b>X:</b> ${round(point.x || 0, 2)} | <b>Y:</b> ${round(point.y || 0, 2)}</p>
         </div>
       `,
       input: 'select',
       inputOptions: {
         move: 'Mover punto/poste',
+        ...(context.network !== 'BT' && context.networkId ? { energize: 'Dar energia a SED proyectada' } : {}),
         branch: 'Crear derivacion desde este poste',
         update: 'Actualizar datos / armado',
         detail: 'Ver detalle de armado',
@@ -1851,6 +2091,7 @@
     });
     if (!result.isConfirmed || !result.value) return;
     if (result.value === 'move') return startMoveProjectedPoint(point, context);
+    if (result.value === 'energize') return energizeChildSedFromLpRpPoint(point, context);
     if (result.value === 'branch') return startBranchFromProjectedPoint(point, context);
     if (result.value === 'update') return updateProjectedPoint(point, context);
     if (result.value === 'detail') return showArmadoDetail(point, context);
@@ -1869,6 +2110,8 @@
         <div style="text-align:left">
           <p><b>Longitud:</b> ${Math.round(lineLength(network.route || []))} m</p>
           <p><b>Postes/nodos:</b> ${polesCount}</p>
+          <p><b>Sistema:</b> ${escapeHtml(network.phaseMode || 'TRIFASICO')}</p>
+          <p><b>Conductor:</b> ${escapeHtml(network.conductor?.name || 'AAAC 35 mm2')}</p>
           <div class="pg-card">Esta accion elimina directamente el conductor/trazo y todos los postes de esta ruta.</div>
         </div>
       `,
@@ -1881,6 +2124,60 @@
     });
     if (!result.isConfirmed || result.value !== 'deleteRoute') return;
     return deleteLpRpNetworkById(networkId);
+  }
+
+  async function energizeChildSedFromLpRpPoint(point, context = {}) {
+    const pending = state.childSeds.filter((sed) => !isChildConnected(sed.id));
+    const candidates = pending.length ? pending : state.childSeds;
+    if (!candidates.length) {
+      notify('Primero cree una SED proyectada hija para darle energia.', 'error', 7000);
+      return;
+    }
+    const options = {};
+    candidates.forEach((sed) => {
+      const meters = Math.round(distance(point, sed));
+      options[sed.id] = `${sed.name} ${sed.connected ? '(ya energizada)' : '(sin energia)'} - ${meters} m`;
+    });
+    const result = await modal({
+      title: 'Dar energia desde poste RP/LP',
+      html: `
+        <div style="text-align:left">
+          <p><b>Poste origen:</b> ${escapeHtml(point.id || context.network || 'RP/LP')}</p>
+          <p><b>Red:</b> ${escapeHtml(context.network || 'LP/RP')}</p>
+          <div class="pg-card">Seleccione la SED proyectada que recibira energia desde este poste. La SED quedara encendida en verde.</div>
+        </div>
+      `,
+      input: 'select',
+      inputOptions: options,
+      inputPlaceholder: 'Seleccione SED proyectada',
+      showCancelButton: true,
+      confirmButtonText: 'Dar energia'
+    });
+    if (!result.isConfirmed || !result.value) return;
+    const child = state.childSeds.find((sed) => sed.id === result.value);
+    if (!child) return;
+
+    state.lpConnections = state.lpConnections.filter((connection) => connection.childSedId !== child.id);
+    state.lpConnections.push({
+      id: `ENERGIA_${Date.now().toString(36)}`,
+      childSedId: child.id,
+      sourcePointId: point.id || '',
+      networkId: context.networkId || '',
+      networkKind: context.network || 'LP/RP',
+      conductor: point.conductor || null,
+      points: [point, child],
+      type: 'lp_rp_energy'
+    });
+    child.connected = true;
+    child.energized = true;
+    child.substationPoleType = child.substationPoleType || 'Poste CAC 13/400';
+    child.energySourcePointId = point.id || '';
+    child.energyNetworkId = context.networkId || '';
+    child.energyNetworkKind = context.network || 'LP/RP';
+    child.energyUpdatedAt = new Date().toISOString();
+    saveProject();
+    renderProjected();
+    notify(`SED ${child.name} energizada desde poste ${point.id || context.network || 'LP/RP'}.`, 'success', 8000);
   }
 
   async function openBtRouteActions(routeId) {
@@ -1907,14 +2204,15 @@
     });
   }
 
-  function startBranchFromProjectedPoint(point, context = {}) {
+  async function startBranchFromProjectedPoint(point, context = {}) {
     if (context.network === 'BT') {
       const route = state.btRoutes.find((item) => item.id === context.routeId);
       state.selectedChildId = context.childSedId || route?.childSedId || state.selectedChildId;
       return startBtBranchFromPoint(point);
     }
-    state.tempLpKind = isRpKind(context.network) ? 'RP' : 'LP';
-    state.tempLpSpan = 140;
+    const config = await askLpRpTechnicalConfig(isRpKind(context.network) ? 'RP' : 'LP');
+    if (!config) return;
+    applyTempLpRpConfig(config);
     state.mode = 'draw-lp-reference';
     state.tempBtPoints = [point];
     showTraceToolbar(`${state.tempLpKind}: derivacion desde poste. Click agrega poste`, {
@@ -2523,6 +2821,11 @@
     });
     if (!choice.isConfirmed) return;
     const options = choice.value || { network: 'BT', mode: '2d' };
+    normalizeProjectState();
+    sanitizeProjectGeometry();
+    refreshServiceDrops({ dropMax: currentDropMax() });
+    updateMechanicalModel();
+    saveProject();
     const kml = buildProjectedKml(options);
     const date = new Date().toISOString().slice(0, 10);
     const suffix = options.mode === '3d' ? 'kmz_3d_visual' : 'kmz_2d';
@@ -2572,7 +2875,15 @@
     const styles = kmlStyles();
     if (network === 'BT') {
       placemarks.push('<Folder><name>SED proyectadas</name>');
-      state.childSeds.forEach((sed) => placemarks.push(pointKml(sed.name, sed, '#sedStyle')));
+      state.childSeds.forEach((sed, index) => {
+        const sedCode = sed.id || `SEDP_${index + 1}`;
+        placemarks.push(pointKml(
+          `Subestacion ${sedCode}`,
+          sed,
+          '#sedStyle',
+          sedDescriptionHtml(sed, sedCode)
+        ));
+      });
       placemarks.push('</Folder>');
 
       placemarks.push('<Folder><name>Red BT proyectada</name>');
@@ -2585,15 +2896,25 @@
             placemarks.push(...btAuxiliary3dKml(point, route, index + 1));
           });
         } else {
-          placemarks.push(lineKml(route.id, points, { style: '#btStyle2d' }));
-          points.slice(1).forEach((point, index) => placemarks.push(pointKml(point.id || `PBT_${index + 1}`, point, '#poleStyle2d', poleDescriptionHtml(point, route, index + 1))));
+          placemarks.push(lineKml(`Tramo BT Aéreo ${route.id}`, points, {
+            style: '#btStyle2d',
+            description: btRouteDescriptionHtml(route, points)
+          }));
+          points.slice(1).forEach((point, index) => placemarks.push(pointKml(
+            `Poste ${point.id || `PBT_${index + 1}`}`,
+            point,
+            '#poleStyle2d',
+            poleDescriptionHtml(point, route, index + 1)
+          )));
         }
       });
       placemarks.push('</Folder>');
 
       placemarks.push('<Folder><name>Acometidas BT</name>');
       state.design.serviceDrops.forEach((line) => {
-        placemarks.push(lineKml(line.id, line.points, {
+        const client = getClientById(line.clientId);
+        const supplyCode = line.clientId || client?.id || line.id;
+        placemarks.push(lineKml(`Suministro ${supplyCode}`, line.points, {
           altitude: mode === '3d' ? 6 : 0,
           style: line.overLimit ? '#dropOverStyle' : '#dropStyle',
           description: serviceDropDescriptionHtml(line)
@@ -2706,8 +3027,49 @@
     return html ? `<description><![CDATA[${html}]]></description>` : '';
   }
 
+  function sedDescriptionHtml(sed, sedCode) {
+    return `
+      <div style="font-family:Arial,sans-serif;min-width:280px">
+        <h3 style="margin:0 0 8px;color:#0b5394">Subestacion proyectada</h3>
+        <p><b>Descripcion RedCAD:</b> Subestacion</p>
+        <p><b>Codigo:</b> ${escapeHtml(sedCode || sed.id || sed.name || '')}</p>
+        <p><b>Nombre:</b> ${escapeHtml(sed.name || sedCode || '')}</p>
+        <p><b>Padre:</b> ${escapeHtml(sed.parentId || state.parentSedId || '')}</p>
+        <p><b>Estado:</b> ${sed.connected || sed.energized ? 'ENERGIZADA desde LP/RP' : 'PENDIENTE LP/RP'}</p>
+        <p><b>Tipo subestacion:</b> ${escapeHtml(sed.substationType || '15kVA-2ø-13,2kV')}</p>
+        <p><b>Poste subestacion:</b> ${escapeHtml(sed.substationPoleType || 'Poste CAC 13/400')}</p>
+      </div>
+    `;
+  }
+
+  function btRouteDescriptionHtml(route, points) {
+    const length = lineLength(points);
+    const spans = [];
+    for (let i = 1; i < points.length; i += 1) spans.push(distance(points[i - 1], points[i]));
+    const maxSpan = spans.length ? Math.max(...spans) : 0;
+    return `
+      <div style="font-family:Arial,sans-serif;min-width:280px">
+        <h3 style="margin:0 0 8px;color:#0b5394">Tramo BT Aéreo proyectado</h3>
+        <p><b>Descripcion RedCAD:</b> Tramo BT Aéreo</p>
+        <p><b>Codigo tramo:</b> ${escapeHtml(route.id || '')}</p>
+        <p><b>SED proyectada:</b> ${escapeHtml(route.childSedId || '')}</p>
+        <p><b>Longitud total:</b> ${Math.round(length)} m</p>
+        <p><b>Postes del tramo:</b> ${Math.max(0, points.length - 1)}</p>
+        <p><b>Vano maximo:</b> ${Math.round(maxSpan)} m</p>
+        <p><b>Vano diseño:</b> ${Math.round(route.spanMeters || 0)} m</p>
+      </div>
+    `;
+  }
+
+  function mechanicalForPoint(point) {
+    return (state.mechanical.structures || []).find((item) => samePoint(item.point, point) || item.point?.id === point.id) || null;
+  }
+
   function poleDescriptionHtml(point, route, index) {
     const armado = displayArmadoName(point, { network: 'BT', source: 'bt-route', routeId: route.id, pointIndex: index });
+    const mecanico = point.manualMecanico || point.mecanico || mechanicalForPoint(point)?.mecanico || 'CALCULO PRELIMINAR';
+    const spanBefore = route?.points?.[index - 1] ? distance(route.points[index - 1], point) : 0;
+    const spanAfter = route?.points?.[index + 1] ? distance(point, route.points[index + 1]) : 0;
     const drops = state.design.serviceDrops.filter((drop) => drop.sourcePointId === point.id || samePoint(drop.points?.[0], point));
     const usersHtml = drops.length
       ? drops.map((drop) => clientHistoryHtml(getClientById(drop.clientId), drop)).join('')
@@ -2715,8 +3077,11 @@
     return `
       <div style="font-family:Arial,sans-serif;min-width:280px">
         <h3 style="margin:0 0 8px;color:#0b5394">Poste proyectado BT</h3>
+        <p><b>Descripcion RedCAD:</b> Poste BT</p>
         <p><b>Codigo poste:</b> ${escapeHtml(point.id || `PBT_${index}`)}</p>
         <p><b>Armado:</b> ${escapeHtml(armado)}</p>
+        <p><b>Calculo mecanico:</b> ${escapeHtml(mecanico)}</p>
+        <p><b>Vano anterior:</b> ${Math.round(spanBefore)} m | <b>Vano siguiente:</b> ${Math.round(spanAfter)} m</p>
         <p><b>SED proyectada:</b> ${escapeHtml(route.childSedId || '')}</p>
         <p><b>Ex trafo / SED padre:</b> ${escapeHtml(state.parentSedId || '')}</p>
         <p><b>Altura referencial:</b> 8 m</p>
@@ -2731,8 +3096,12 @@
     return `
       <div style="font-family:Arial,sans-serif;min-width:280px">
         <h3 style="margin:0 0 8px;color:#0b5394">Acometida proyectada</h3>
+        <p><b>Descripcion RedCAD:</b> Suministro / Acometida</p>
+        <p><b>Codigo acometida:</b> ${escapeHtml(drop.id || '')}</p>
         <p><b>Longitud:</b> ${Math.round(drop.length || 0)} m</p>
         <p><b>Maximo:</b> ${drop.dropMax || 25} m</p>
+        <p><b>Tipo calculado:</b> ${escapeHtml(drop.dropClass || 'corta')}</p>
+        <p><b>Poste padre:</b> ${escapeHtml(drop.sourcePointId || '')}</p>
         ${drop.overLimit ? '<p style="color:#b91c1c"><b>Advertencia:</b> supera la longitud maxima.</p>' : ''}
         <hr>
         ${clientHistoryHtml(client, drop)}
@@ -2862,6 +3231,52 @@
     return 'proyectadas_lp_rp_global_v1';
   }
 
+  function catalogStorageKey() {
+    return 'redcad_catalogos_globales_v1';
+  }
+
+  function restoreGlobalCatalogs() {
+    try {
+      const raw = localStorage.getItem(catalogStorageKey());
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed?.schema !== 'redcad-catalogos-v1') return;
+      state.catalogs = {
+        configuracion: parsed.configuracion || null,
+        suministros: parsed.suministros || null
+      };
+    } catch (error) {
+      console.warn('No se pudo restaurar catalogos RedCAD globales:', error);
+    }
+  }
+
+  function saveGlobalCatalogs() {
+    try {
+      localStorage.setItem(catalogStorageKey(), JSON.stringify({
+        schema: 'redcad-catalogos-v1',
+        updatedAt: new Date().toISOString(),
+        configuracion: compactCatalogForStorage(state.catalogs.configuracion),
+        suministros: compactCatalogForStorage(state.catalogs.suministros)
+      }));
+    } catch (error) {
+      console.warn('No se pudieron guardar catalogos globales:', error);
+      notify('El catalogo se cargo, pero el navegador no pudo guardarlo completo. Exporte respaldo si necesita conservarlo.', 'warning', 9000);
+    }
+  }
+
+  function compactCatalogForStorage(catalog) {
+    if (!catalog) return null;
+    return {
+      name: catalog.name || '',
+      sheets: catalog.sheets || [],
+      substationTypes: catalog.substationTypes || [],
+      conductors: catalog.conductors || [],
+      poleTypes: catalog.poleTypes || [],
+      loadedAt: catalog.loadedAt || new Date().toISOString(),
+      persisted: true
+    };
+  }
+
   function loadLpRpProjects() {
     try {
       const raw = localStorage.getItem(lpRpStorageKey());
@@ -2962,7 +3377,8 @@
     state.btRoutes = saved.btRoutes || [];
     state.assignments = saved.assignments || {};
     state.design = saved.design || { poles: [], btLines: [], serviceDrops: [], pat: [], retenidas: [], warnings: [] };
-    state.catalogs = saved.catalogs || { configuracion: null, suministros: null };
+    state.catalogs = saved.catalogs || state.catalogs || { configuracion: null, suministros: null };
+    if (!state.catalogs.configuracion && !state.catalogs.suministros) restoreGlobalCatalogs();
     state.mechanical = saved.mechanical || { spans: [], structures: [] };
     state.lpProject = saved.lpProject || { name: '', code: '', startedAt: '', updatedAt: '' };
     state.startedAt = saved.startedAt || '';
@@ -3052,9 +3468,11 @@
     return output;
   }
 
-  function buildLpNetworkFromNodes(fixedNodes, spanMeters, kind) {
+  function buildLpNetworkFromNodes(fixedNodes, spanMeters, kind, config = {}) {
     const route = [];
     const poles = [];
+    const phaseMode = config.phaseMode || 'TRIFASICO';
+    const conductor = config.conductor || { name: 'AAAC 35 mm2', source: 'por defecto LP' };
     fixedNodes.forEach((node, index) => {
       if (index === 0) route.push(node);
       const next = fixedNodes[index + 1];
@@ -3065,22 +3483,50 @@
           ...point,
           id: `${kind}_POSTE_${Date.now().toString(36)}_${index + 1}_${poleIndex + 1}`,
           fixed: false,
-          role: 'poste_intermedio'
+          role: 'poste_intermedio',
+          phaseMode,
+          conductor
         };
         poles.push(pole);
         route.push(pole);
       });
       route.push(next);
     });
-    return {
+    const network = {
       id: `${kind}_NET_${Date.now().toString(36)}`,
       kind,
       spanMeters,
+      phaseMode,
+      conductor,
       fixedNodes,
       poles,
       route,
       type: `${kind.toLowerCase()}_network`
     };
+    decorateLpRpNetwork(network);
+    return network;
+  }
+
+  function decorateLpRpNetwork(network) {
+    const points = validPointList(network.route);
+    points.forEach((point, index) => {
+      const prev = points[index - 1];
+      const next = points[index + 1];
+      const armado = classifyArmado(prev, point, next);
+      const mecanico = classifyMechanical(prev, point, next);
+      const terminal = !prev || !next;
+      const strongAngle = /FUERTE/i.test(armado);
+      const angle = /ANGULO/i.test(armado);
+      Object.assign(point, {
+        phaseMode: point.phaseMode || network.phaseMode || 'TRIFASICO',
+        conductor: point.conductor || network.conductor || { name: 'AAAC 35 mm2', source: 'por defecto LP' },
+        armado: point.manualArmado || point.armado || armado,
+        mecanico: point.manualMecanico || point.mecanico || mecanico,
+        poleType: terminal || strongAngle ? 'Poste CAC esfuerzo alto' : angle ? 'Poste CAC esfuerzo medio' : 'Poste CAC alineamiento',
+        pat: terminal ? 'PAT recomendado' : 'PAT segun norma/catalogo',
+        retenida: terminal ? 'Retenida terminal' : strongAngle ? 'Retenida por angulo fuerte' : angle ? 'Evaluar retenida por angulo' : 'Sin retenida preliminar'
+      });
+    });
   }
 
   function densifySegment(start, end, maxSpan) {
