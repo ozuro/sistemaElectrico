@@ -7,7 +7,7 @@
   const START_CONNECTION_TOLERANCE_M = 1.0;
   const SED_CONNECTION_TOLERANCE_M = 3.0;
   const POLE_SNAP_TOLERANCE_M = 5.0;
-  const FIRST_BT_TO_SED_MAX_DISTANCE_M = 120.0;
+  const BRANCH_START_SNAP_TOLERANCE_M = 5.0;
   const LONG_BT_SEGMENT_WARNING_M = 120;
 
   const notify = (message, type = 'info', timeout = 7000) => {
@@ -656,6 +656,11 @@
     return /^tbt[0-9]/i.test(text(name)) && raw.includes('cable');
   }
 
+  function isProjectedBtPlacemark(name) {
+    const value = text(name);
+    return /^btref[_-]/i.test(value) || /^tramo\s+bt/i.test(value);
+  }
+
   function latLngToKey(latlng) {
     const point = projectLatLng(latlng);
     if (!point) return '';
@@ -760,7 +765,7 @@
       result.tramosBT.push({
         name,
         description: description || 'Tramo BT Aéreo',
-        path: path.length > 1 ? [path[0], path[path.length - 1]] : path,
+        path,
         index
       });
     });
@@ -797,9 +802,6 @@
           .filter(path => path.length > 1);
       } else if (type === 'tramo_bt') {
         paths = paths.map(path => simplifyPath(path, 0)).filter(path => path.length > 1);
-        if (/^tramo\s+bt/i.test(text(name)) || /^btref[_-]/i.test(text(name))) {
-          paths = paths.map(path => path.length > 1 ? [path[0], path[path.length - 1]] : path);
-        }
       }
       const firstPoint = paths.find(path => path.length)?.[0] || null;
 
@@ -1034,6 +1036,7 @@
       if (code && nodeByCode.has(code)) return nodeByCode.get(code);
       return nearest(snap.point || snap, btNodes, DUPLICATE_TOLERANCE_M);
     };
+    const getBranchStartNode = snap => nearest(snap.point || snap, btNodes, BRANCH_START_SNAP_TOLERANCE_M);
     const getOrCreateNode = (snap, parentId = 0, isFirstInBranch = false) => {
       const existing = getExistingNode(snap);
       if (existing) return existing;
@@ -1053,6 +1056,7 @@
     };
 
     parsed.tramosBT.forEach((tramo, tramoIndex) => {
+      const projectedBt = isProjectedBtPlacemark(tramo.name);
       let projectedPath = (tramo.path || [])
         .map(latlng => projectLatLng(latlng))
         .filter(Boolean)
@@ -1087,6 +1091,13 @@
           if (distance(point.point, sedPoint) <= SED_CONNECTION_TOLERANCE_M) {
             parentId = sed.id;
           }
+          if (!parentId && projectedBt) {
+            const branchStart = getBranchStartNode(point);
+            if (branchStart) {
+              previousNode = branchStart;
+              return;
+            }
+          }
           previousNode = getOrCreateNode(point, parentId, parentId === sed.id);
           if (parentNode) addDebugSegment(parentNode, previousNode, tramo.name || `Tramo ${tramoIndex + 1}`);
           return;
@@ -1100,7 +1111,7 @@
 
     if (!btNodes.length) throw new Error('No se generó ningún poste desde Tramo BT Aéreo.');
     if (!btNodes.some(node => Number(node.row.parentId || 0) === sed.id)) {
-      const firstBtNode = nearest(sedPoint, btNodes, FIRST_BT_TO_SED_MAX_DISTANCE_M);
+      const firstBtNode = nearest(sedPoint, btNodes, SED_CONNECTION_TOLERANCE_M);
       if (firstBtNode) {
         firstBtNode.row.parentId = sed.id;
         firstBtNode.row.comentario = 'Primer poste BT real';
@@ -1603,7 +1614,7 @@
         });
       });
       if (localNodes.length && !localNodes.some(node => Number(node.row.parentId || 0) === sedNode.id)) {
-        const first = nearest(sedPoint, localNodes, FIRST_BT_TO_SED_MAX_DISTANCE_M);
+        const first = nearest(sedPoint, localNodes, SED_CONNECTION_TOLERANCE_M);
         if (first) {
           first.row.parentId = sedNode.id;
           first.row.comentario = 'Primer poste BT real';

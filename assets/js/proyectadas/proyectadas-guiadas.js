@@ -50,6 +50,7 @@
   let traceToolbar = null;
   injectProjectedStyles();
   restoreGlobalCatalogs();
+  loadBundledRedcadCatalogs();
 
   function ensureLayer() {
     if (projectedLayer) return projectedLayer;
